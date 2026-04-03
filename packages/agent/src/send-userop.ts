@@ -38,7 +38,7 @@ const PIMLICO_API_KEY   = process.env.PIMLICO_API_KEY as string;
 if (!AGENT_PRIVATE_KEY) throw new Error("AGENT_PRIVATE_KEY not set in .env");
 if (!PIMLICO_API_KEY)   throw new Error("PIMLICO_API_KEY not set in .env");
 
-const PAYMASTER_ADDRESS  = "0x83da591891e83a978deA8640Ddc7F047fdbEf75D" as Address;
+const PAYMASTER_ADDRESS  = "0xc4c2Cf13784f4388ae303E71147C9cf6dFd6c7d7" as Address;
 const REGISTRY_ADDRESS   = "0xfbcee3e39a0909549fbc28cac37141d01f946189" as Address;
 const ENTRYPOINT_ADDRESS = entryPoint07Address; // 0x0000000071727De22E5E9d8BAf0edAc6f37da032
 

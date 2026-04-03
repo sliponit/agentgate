@@ -1,5 +1,4 @@
 import { useState, useRef } from "react";
-import { keccak256, toBytes, type Hex } from "viem";
 import { NetworkId, NETWORKS, DEPLOYMENTS } from "../lib/chains";
 import { useWallet } from "../hooks/useWallet";
 
@@ -19,18 +18,16 @@ const REGISTRY_ABI = [
 
 const PAYMASTER_ABI = [
   {
-    name: "setEndpointSponsorshipByUrl",
+    name: "fundAndSetGasShare",
     type: "function",
     inputs: [
-      { name: "url", type: "string"  },
+      { name: "url", type: "string" },
       { name: "bps", type: "uint16" },
     ],
     outputs: [],
-    stateMutability: "nonpayable",
+    stateMutability: "payable",
   },
 ] as const;
-
-type PaymasterMode = "deployed" | "custom" | "none";
 
 interface TestResult {
   ok: boolean;
@@ -40,18 +37,13 @@ interface TestResult {
   isX402: boolean;
   contentType: string | null;
   bodyPreview: string;
-  paymentRequired?: {
-    price?: string;
-    network?: string;
-    asset?: string;
-  };
+  paymentRequired?: { price?: string; network?: string; asset?: string };
   errorMsg?: string;
 }
 
 interface PublishResult {
   txHash: string;
   networkId: NetworkId;
-  endpointId?: string;
 }
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
@@ -69,143 +61,92 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 }
 
 const inputStyle: React.CSSProperties = {
-  background: "#0d0d0d",
-  border: "1px solid #252525",
-  borderRadius: 6,
-  color: "#e5e7eb",
-  fontFamily: "'JetBrains Mono', monospace",
-  fontSize: 12,
-  padding: "9px 12px",
-  outline: "none",
-  width: "100%",
-  boxSizing: "border-box",
-  transition: "border-color 0.2s",
+  background: "#0d0d0d", border: "1px solid #252525", borderRadius: 6,
+  color: "#e5e7eb", fontFamily: "'JetBrains Mono', monospace", fontSize: 12,
+  padding: "9px 12px", outline: "none", width: "100%",
+  boxSizing: "border-box", transition: "border-color 0.2s",
 };
 
 export function PublishForm({ networkId }: { networkId: NetworkId }) {
   const net    = NETWORKS[networkId];
   const wallet = useWallet();
 
-  // Form fields
   const [url,           setUrl]           = useState("");
   const [price,         setPrice]         = useState("0.01");
-  const [gasSharePct,   setGasSharePct]   = useState(100); // 0-100 %
-  const [pmMode,        setPmMode]        = useState<PaymasterMode>("deployed");
-  const [customPm,      setCustomPm]      = useState("");
+  const [gasSharePct,   setGasSharePct]   = useState(100);    // 0–100%
+  const [gasDeposit,    setGasDeposit]    = useState("0.005"); // ETH to deposit
   const [selectedNet,   setSelectedNet]   = useState<NetworkId>(networkId);
 
-  // Test state
   const [testing,       setTesting]       = useState(false);
   const [testResult,    setTestResult]    = useState<TestResult | null>(null);
-
-  // Publish state
   const [publishing,    setPublishing]    = useState(false);
-  const [publishStep,   setPublishStep]   = useState<string>("");
+  const [publishStep,   setPublishStep]   = useState("");
   const [publishResult, setPublishResult] = useState<PublishResult | null>(null);
   const [publishError,  setPublishError]  = useState<string | null>(null);
 
   const urlRef = useRef<HTMLInputElement>(null);
 
-  const paymasterAddress: `0x${string}` =
-    pmMode === "deployed" ? DEPLOYMENTS[selectedNet].paymaster :
-    pmMode === "custom"   ? (customPm as `0x${string}`) :
-    "0x0000000000000000000000000000000000000000";
+  const paymasterAddress = DEPLOYMENTS[selectedNet].paymaster;
 
-  // ── Test endpoint ──────────────────────────────────────────────────────────
+  // ── Test endpoint ─────────────────────────────────────────────────────────
   async function handleTest() {
     if (!url.trim()) { urlRef.current?.focus(); return; }
     setTesting(true);
     setTestResult(null);
     setPublishResult(null);
     setPublishError(null);
-
     const t0 = Date.now();
     try {
-      const res = await fetch(url.trim(), {
-        method: "GET",
-        signal: AbortSignal.timeout(8000),
-      });
-      const latencyMs = Date.now() - t0;
-      const contentType = res.headers.get("content-type");
+      const res = await fetch(url.trim(), { method: "GET", signal: AbortSignal.timeout(8000) });
+      const latencyMs    = Date.now() - t0;
+      const contentType  = res.headers.get("content-type");
       const paymentHeader = res.headers.get("payment-required");
-      const isX402 = res.status === 402;
-
-      let bodyPreview = "";
+      const isX402       = res.status === 402;
+      let bodyPreview    = "";
       let paymentRequired: TestResult["paymentRequired"] = undefined;
-
       try {
         const text = await res.text();
         bodyPreview = text.slice(0, 300);
-
         if (isX402 && paymentHeader) {
           try {
             const parsed = JSON.parse(atob(paymentHeader.split(".")[0])) as any;
             const acc = parsed?.accepts?.[0];
             paymentRequired = {
               price:   acc?.amount ? `$${(Number(acc.amount) / 1e6).toFixed(4)} USDC` : undefined,
-              network: acc?.network,
-              asset:   acc?.asset,
+              network: acc?.network, asset: acc?.asset,
             };
-          } catch {
-            // header parse failed — that's fine
-          }
+          } catch { /* ignore */ }
         }
-      } catch {
-        bodyPreview = "(binary or empty)";
-      }
-
+      } catch { bodyPreview = "(binary or empty)"; }
       const ok = res.status === 200 || res.status === 402;
-      setTestResult({
-        ok,
-        status: res.status,
-        statusText: res.statusText,
-        latencyMs,
-        isX402,
-        contentType,
-        bodyPreview,
-        paymentRequired,
-        errorMsg: ok ? undefined : `HTTP ${res.status} — endpoint returned an error`,
-      });
+      setTestResult({ ok, status: res.status, statusText: res.statusText, latencyMs,
+        isX402, contentType, bodyPreview, paymentRequired,
+        errorMsg: ok ? undefined : `HTTP ${res.status} — endpoint returned an error` });
     } catch (e: any) {
-      setTestResult({
-        ok: false,
-        status: 0,
-        statusText: "Network error",
-        latencyMs: Date.now() - t0,
-        isX402: false,
-        contentType: null,
-        bodyPreview: "",
-        errorMsg: e.name === "TimeoutError"
-          ? "Request timed out after 8s — endpoint unreachable"
-          : `Connection failed: ${e.message}`,
-      });
+      setTestResult({ ok: false, status: 0, statusText: "Network error",
+        latencyMs: Date.now() - t0, isX402: false, contentType: null, bodyPreview: "",
+        errorMsg: e.name === "TimeoutError" ? "Timeout after 8s" : `Connection failed: ${e.message}` });
     } finally {
       setTesting(false);
     }
   }
 
-  // ── Publish on-chain ───────────────────────────────────────────────────────
+  // ── Publish on-chain ──────────────────────────────────────────────────────
   async function handlePublish() {
     if (!testResult?.ok) return;
-    if (!wallet.state.connected) {
-      await wallet.connect();
-      return;
-    }
+    if (!wallet.state.connected) { await wallet.connect(); return; }
     if (wallet.state.chainId !== NETWORKS[selectedNet].chainId) {
-      await wallet.switchNetwork(selectedNet);
-      return;
+      await wallet.switchNetwork(selectedNet); return;
     }
-
     setPublishing(true);
     setPublishError(null);
     setPublishResult(null);
     setPublishStep("");
 
     try {
+      // Step 1: Register on PublisherRegistry
+      setPublishStep("1/2 Registering endpoint…");
       const priceUnits = BigInt(Math.round(parseFloat(price) * 1_000_000));
-
-      // Step 1: Register endpoint on PublisherRegistry
-      setPublishStep("1/2 Registering endpoint on-chain…");
       const regHash = await wallet.writeContract(
         selectedNet,
         DEPLOYMENTS[selectedNet].publisherRegistry,
@@ -214,22 +155,23 @@ export function PublishForm({ networkId }: { networkId: NetworkId }) {
         [url.trim(), priceUnits, paymasterAddress]
       );
 
-      // Step 2: Set gas sponsorship on Paymaster (only for our deployed paymaster)
-      let sponsorHash: string | null = null;
-      if (pmMode === "deployed" && gasSharePct >= 0) {
-        setPublishStep("2/2 Setting gas sponsorship on Paymaster…");
+      // Step 2: Fund your gas budget on the Paymaster
+      if (parseFloat(gasDeposit) > 0) {
+        setPublishStep("2/2 Depositing gas budget…");
+        const depositWei = BigInt(Math.round(parseFloat(gasDeposit) * 1e18));
+        const bps        = Math.round(gasSharePct * 100);
         try {
-          const bps = Math.round(gasSharePct * 100); // 100% → 10000 bps
-          sponsorHash = await wallet.writeContract(
+          await wallet.writeContract(
             selectedNet,
-            DEPLOYMENTS[selectedNet].paymaster,
+            paymasterAddress,
             PAYMASTER_ABI as any,
-            "setEndpointSponsorshipByUrl",
-            [url.trim(), bps]
+            "fundAndSetGasShare",
+            [url.trim(), bps],
+            depositWei
           );
-        } catch (sponsorErr: any) {
-          // Non-blocking — registry registration is the main step
-          console.warn("Sponsorship set failed:", sponsorErr.message);
+        } catch (fundErr: any) {
+          // Log but don't fail — registry registration is the primary step
+          console.warn("Paymaster fund failed:", fundErr.message);
         }
       }
 
@@ -245,20 +187,19 @@ export function PublishForm({ networkId }: { networkId: NetworkId }) {
 
   const wrongNetwork = wallet.state.connected && wallet.state.chainId !== NETWORKS[selectedNet].chainId;
   const canPublish   = testResult?.ok && !publishing && !publishResult;
+  const estCalls     = parseFloat(gasDeposit) > 0 ? Math.floor(parseFloat(gasDeposit) / 0.000054) : 0;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 22 }}>
 
-      {/* ── Network selector ───────────────────────────────────────────────── */}
+      {/* ── Network ─────────────────────────────────────────────────────────── */}
       <Field label="Target Network">
         <div style={{ display: "flex", gap: 8 }}>
           {(["baseSepolia", "hedera"] as NetworkId[]).map((id) => {
             const n = NETWORKS[id];
             const active = selectedNet === id;
             return (
-              <button
-                key={id}
-                onClick={() => { setSelectedNet(id); setTestResult(null); }}
+              <button key={id} onClick={() => { setSelectedNet(id); setTestResult(null); }}
                 style={{
                   flex: 1, padding: "8px 0", fontFamily: "'JetBrains Mono', monospace",
                   fontSize: 11, cursor: "pointer", borderRadius: 6, transition: "all 0.2s",
@@ -274,21 +215,14 @@ export function PublishForm({ networkId }: { networkId: NetworkId }) {
         </div>
       </Field>
 
-      {/* ── Endpoint URL ───────────────────────────────────────────────────── */}
+      {/* ── Endpoint URL ────────────────────────────────────────────────────── */}
       <Field label="Endpoint URL" hint="— must return 200 or 402">
         <div style={{ display: "flex", gap: 8 }}>
-          <input
-            ref={urlRef}
-            type="url"
-            placeholder="https://api.yourservice.com/endpoint"
-            value={url}
-            onChange={(e) => { setUrl(e.target.value); setTestResult(null); }}
+          <input ref={urlRef} type="url" placeholder="https://api.yourservice.com/endpoint"
+            value={url} onChange={(e) => { setUrl(e.target.value); setTestResult(null); }}
             onKeyDown={(e) => e.key === "Enter" && handleTest()}
-            style={{ ...inputStyle, flex: 1 }}
-          />
-          <button
-            onClick={handleTest}
-            disabled={testing || !url.trim()}
+            style={{ ...inputStyle, flex: 1 }} />
+          <button onClick={handleTest} disabled={testing || !url.trim()}
             style={{
               padding: "9px 16px", fontFamily: "'JetBrains Mono', monospace", fontSize: 11,
               borderRadius: 6, cursor: testing || !url.trim() ? "default" : "pointer",
@@ -303,7 +237,7 @@ export function PublishForm({ networkId }: { networkId: NetworkId }) {
         </div>
       </Field>
 
-      {/* ── Test result ────────────────────────────────────────────────────── */}
+      {/* ── Test Result ─────────────────────────────────────────────────────── */}
       {testResult && (
         <div style={{
           background: testResult.ok ? "#0a1a0a" : "#1a0a0a",
@@ -311,18 +245,12 @@ export function PublishForm({ networkId }: { networkId: NetworkId }) {
           borderRadius: 8, padding: "14px 16px",
           display: "flex", flexDirection: "column", gap: 10,
         }}>
-          {/* Status line */}
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <span style={{ fontSize: 16 }}>{testResult.ok ? "✅" : "❌"}</span>
             <div style={{ flex: 1 }}>
-              <span style={{
-                fontSize: 13, fontWeight: 700,
-                color: testResult.ok ? "#4ade80" : "#f87171",
-              }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: testResult.ok ? "#4ade80" : "#f87171" }}>
                 {testResult.ok
-                  ? testResult.isX402
-                    ? "x402 Payment Protected Endpoint"
-                    : "Endpoint Reachable"
+                  ? testResult.isX402 ? "x402 Payment Protected Endpoint" : "Endpoint Reachable"
                   : "Test Failed"}
               </span>
               {testResult.errorMsg && (
@@ -331,18 +259,12 @@ export function PublishForm({ networkId }: { networkId: NetworkId }) {
             </div>
             <span style={{ fontSize: 11, color: "#555" }}>{testResult.latencyMs}ms</span>
           </div>
-
-          {/* Response details */}
           <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 20px" }}>
             {[
               ["HTTP Status", `${testResult.status} ${testResult.statusText}`],
               ["Content-Type", testResult.contentType || "—"],
-              testResult.isX402 && testResult.paymentRequired?.price
-                ? ["Price", testResult.paymentRequired.price]
-                : null,
-              testResult.isX402 && testResult.paymentRequired?.network
-                ? ["Network", testResult.paymentRequired.network]
-                : null,
+              testResult.isX402 && testResult.paymentRequired?.price ? ["Price", testResult.paymentRequired.price] : null,
+              testResult.isX402 && testResult.paymentRequired?.network ? ["Network", testResult.paymentRequired.network] : null,
             ].filter(Boolean).map((item) => { const [k, v] = item as string[]; return (
               <div key={k} style={{ display: "flex", gap: 6 }}>
                 <span style={{ fontSize: 10, color: "#555" }}>{k}</span>
@@ -350,196 +272,106 @@ export function PublishForm({ networkId }: { networkId: NetworkId }) {
               </div>
             ); })}
           </div>
-
-          {/* Body preview */}
           {testResult.bodyPreview && (
             <pre style={{
               margin: 0, fontSize: 10, color: "#555",
-              background: "#050505", border: "1px solid #111",
-              borderRadius: 4, padding: "8px 10px",
-              maxHeight: 80, overflow: "auto", whiteSpace: "pre-wrap", wordBreak: "break-all",
+              background: "#050505", border: "1px solid #111", borderRadius: 4,
+              padding: "8px 10px", maxHeight: 80, overflow: "auto",
+              whiteSpace: "pre-wrap", wordBreak: "break-all",
             }}>
               {testResult.bodyPreview}
             </pre>
           )}
-
-          {!testResult.ok && (
-            <div style={{ fontSize: 11, color: "#666" }}>
-              Only HTTP 200 and 402 responses are accepted. Fix the endpoint and re-test.
-            </div>
-          )}
         </div>
       )}
 
-      {/* ── Price ──────────────────────────────────────────────────────────── */}
+      {/* ── Price ───────────────────────────────────────────────────────────── */}
       <Field label="Price per Call" hint="— in USDC">
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ fontSize: 14, color: "#555", paddingLeft: 4 }}>$</span>
-          <input
-            type="number" min="0" step="0.001"
-            value={price}
+          <input type="number" min="0" step="0.001" value={price}
             onChange={(e) => setPrice(e.target.value)}
-            style={{ ...inputStyle, width: 120 }}
-          />
+            style={{ ...inputStyle, width: 120 }} />
           <span style={{ fontSize: 12, color: "#555" }}>USDC</span>
           <span style={{ fontSize: 10, color: "#333", marginLeft: 4 }}>
-            = {Math.round(parseFloat(price || "0") * 1_000_000).toLocaleString()} units (6 dec)
+            = {Math.round(parseFloat(price || "0") * 1_000_000).toLocaleString()} units
           </span>
         </div>
       </Field>
 
-      {/* ── Paymaster ──────────────────────────────────────────────────────── */}
-      <Field label="Gas Paymaster" hint="— who sponsors transaction gas">
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {([
-            ["deployed",  `AgentGate Paymaster (${DEPLOYMENTS[selectedNet].paymaster.slice(0, 10)}…)`,
-              "Uses the already-deployed paymaster with 0.5 HBAR / 0.005 ETH deposit"],
-            ["custom",    "Custom paymaster address",
-              "Deploy your own ERC-4337 paymaster"],
-            ["none",      "No paymaster — agent pays own gas",
-              "Agent must hold native currency for gas"],
-          ] as [PaymasterMode, string, string][]).map(([mode, label, desc]) => {
-            const active = pmMode === mode;
-            return (
-              <div
-                key={mode}
-                onClick={() => setPmMode(mode)}
-                style={{
-                  padding: "10px 12px", borderRadius: 6, cursor: "pointer",
-                  border: `1px solid ${active ? net.color + "88" : "#1e1e1e"}`,
-                  background: active ? `${net.color}0a` : "#0a0a0a",
-                  transition: "all 0.15s",
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <div style={{
-                    width: 12, height: 12, borderRadius: "50%", flexShrink: 0,
-                    border: `2px solid ${active ? net.color : "#333"}`,
-                    background: active ? net.color : "transparent",
-                    transition: "all 0.15s",
-                  }} />
-                  <span style={{ fontSize: 12, color: active ? "#e5e7eb" : "#555" }}>{label}</span>
-                </div>
-                <div style={{ fontSize: 10, color: "#444", marginLeft: 20, marginTop: 3 }}>{desc}</div>
-              </div>
-            );
-          })}
+      {/* ── Gas Budget ──────────────────────────────────────────────────────── */}
+      <Field label="Your Gas Budget" hint="— ETH you deposit to sponsor agent gas calls">
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
 
-          {pmMode === "custom" && (
-            <input
-              type="text"
-              placeholder="0x000..."
-              value={customPm}
-              onChange={(e) => setCustomPm(e.target.value)}
-              style={{ ...inputStyle, marginTop: 4 }}
-            />
-          )}
-        </div>
-      </Field>
+          {/* Deposit amount */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <input type="number" min="0" step="0.001" value={gasDeposit}
+              onChange={(e) => setGasDeposit(e.target.value)}
+              style={{ ...inputStyle, width: 140 }} />
+            <span style={{ fontSize: 12, color: "#555" }}>{net.currency}</span>
+            {estCalls > 0 && (
+              <span style={{ fontSize: 10, color: "#333" }}>≈ {estCalls.toLocaleString()} sponsored calls</span>
+            )}
+          </div>
 
-      {/* ── Gas Sponsorship Slider ─────────────────────────────────────────── */}
-      {pmMode === "deployed" && (
-        <Field
-          label="Gas Sponsorship"
-          hint="— % of gas you cover for agents calling this endpoint"
-        >
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            {/* Slider */}
+          {/* Gas share slider */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              <input
-                type="range"
-                min={0} max={100} step={5}
-                value={gasSharePct}
+              <span style={{ fontSize: 10, color: "#444", minWidth: 80 }}>Gas share:</span>
+              <input type="range" min={0} max={100} step={5} value={gasSharePct}
                 onChange={(e) => setGasSharePct(Number(e.target.value))}
-                style={{ flex: 1, accentColor: net.color, cursor: "pointer" }}
-              />
+                style={{ flex: 1, accentColor: net.color, cursor: "pointer" }} />
               <div style={{
-                minWidth: 52, textAlign: "center",
-                fontFamily: "'JetBrains Mono', monospace",
-                fontSize: 16, fontWeight: 700,
+                minWidth: 48, textAlign: "center",
+                fontFamily: "'JetBrains Mono', monospace", fontSize: 15, fontWeight: 700,
                 color: gasSharePct >= 75 ? "#4ade80" : gasSharePct >= 40 ? net.color : "#f87171",
               }}>
                 {gasSharePct}%
               </div>
             </div>
-
-            {/* Labels */}
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: "#444" }}>
-              <span>agent pays gas</span>
-              <span>you pay gas</span>
-            </div>
-
-            {/* Context callout */}
-            <div style={{
-              padding: "10px 14px", borderRadius: 6,
-              background: gasSharePct >= 75 ? "#0a1a0a" : gasSharePct >= 40 ? "#0a0f1a" : "#1a0a0a",
-              border: `1px solid ${gasSharePct >= 75 ? "#1a3a1a" : gasSharePct >= 40 ? "#1a2a3a" : "#3a1a1a"}`,
-              fontSize: 11, lineHeight: 1.5,
-            }}>
-              {gasSharePct === 100 && (
-                <span style={{ color: "#4ade80" }}>
-                  🏆 <strong>Maximum appeal</strong> — you sponsor 100% of gas. Agents pay nothing. 
-                  Recommended to attract all AI agents.
-                </span>
-              )}
-              {gasSharePct >= 50 && gasSharePct < 100 && (
-                <span style={{ color: net.color }}>
-                  ⚡ <strong>Balanced</strong> — you sponsor {gasSharePct}% of gas.
-                  Effective daily budget: {(gasSharePct / 100).toFixed(2)}× per call.
-                  More calls per day vs 100%.
-                </span>
-              )}
-              {gasSharePct > 0 && gasSharePct < 50 && (
-                <span style={{ color: "#f59e0b" }}>
-                  ⚠ <strong>Low appeal</strong> — only {gasSharePct}% sponsored.
-                  Agents prefer fully-sponsored endpoints. Consider increasing.
-                </span>
-              )}
-              {gasSharePct === 0 && (
-                <span style={{ color: "#f87171" }}>
-                  ✗ <strong>No sponsorship</strong> — agents must hold {net.currency} for gas.
-                  This endpoint will not attract AI agents without wallets.
-                </span>
-              )}
-            </div>
-
-            {/* Competitive breakdown */}
-            <div style={{
-              display: "flex", gap: 6,
-              fontSize: 10, color: "#555",
-              fontFamily: "'JetBrains Mono', monospace",
-            }}>
-              <span>daily budget: 0.01 {net.currency}</span>
-              <span style={{ color: "#333" }}>·</span>
-              <span>effective/call: ≤{(0.01 * gasSharePct / 100).toFixed(5)} {net.currency}</span>
-              <span style={{ color: "#333" }}>·</span>
-              <span>est. calls/day: ~{gasSharePct > 0 ? Math.floor(0.01 / (0.0003 * gasSharePct / 100)) : "∞"}</span>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: "#333" }}>
+              <span>agent pays all gas</span>
+              <span>you pay all gas</span>
             </div>
           </div>
-        </Field>
-      )}
 
-      {/* ── Paymaster address preview ───────────────────────────────────────── */}
+          {/* Callout */}
+          <div style={{
+            padding: "10px 14px", borderRadius: 6, fontSize: 11, lineHeight: 1.5,
+            background: gasSharePct >= 75 ? "#0a1a0a" : gasSharePct >= 40 ? "#0a0f1a" : "#1a0a0a",
+            border: `1px solid ${gasSharePct >= 75 ? "#1a3a1a" : gasSharePct >= 40 ? "#1a2a3a" : "#3a1a1a"}`,
+          }}>
+            {gasSharePct === 100 && <span style={{ color: "#4ade80" }}>🏆 <strong>Maximum appeal</strong> — agents pay zero gas. Most competitive. Your {gasDeposit || "0"} {net.currency} funds ~{estCalls.toLocaleString()} calls.</span>}
+            {gasSharePct >= 50 && gasSharePct < 100 && <span style={{ color: net.color }}>⚡ <strong>{gasSharePct}% sponsored</strong> — you cover {gasSharePct}% of gas per call. Budget lasts {(100 / gasSharePct).toFixed(1)}× longer. Agents may prefer 100% endpoints.</span>}
+            {gasSharePct > 0 && gasSharePct < 50 && <span style={{ color: "#f59e0b" }}>⚠ <strong>Low sponsorship ({gasSharePct}%)</strong> — agents must cover {100 - gasSharePct}% of gas themselves. Consider increasing to be competitive.</span>}
+            {gasSharePct === 0 && <span style={{ color: "#f87171" }}>✗ <strong>No gas sponsorship</strong> — agents need their own {net.currency} wallet. Endpoint will be ignored by most AI agents.</span>}
+          </div>
+
+          {/* How it works note */}
+          <div style={{ fontSize: 10, color: "#333", lineHeight: 1.6 }}>
+            Your {gasDeposit || "0"} {net.currency} deposit goes directly into the paymaster's EntryPoint pool,
+            earmarked for this endpoint. Only calls to your endpoint can spend it.
+            Set gas share = 100% to maximize agent adoption.
+          </div>
+        </div>
+      </Field>
+
+      {/* ── Paymaster address ───────────────────────────────────────────────── */}
       <div style={{
         display: "flex", alignItems: "center", gap: 8,
         padding: "8px 12px", background: "#0a0a0a",
         border: "1px solid #1a1a1a", borderRadius: 6,
       }}>
-        <span style={{ fontSize: 10, color: "#444" }}>paymasterAddress</span>
-        <span style={{ fontSize: 10, color: "#666", fontFamily: "'JetBrains Mono', monospace", flex: 1 }}>
+        <span style={{ fontSize: 10, color: "#444" }}>paymaster</span>
+        <span style={{ fontSize: 10, color: "#555", fontFamily: "'JetBrains Mono', monospace", flex: 1 }}>
           {paymasterAddress}
         </span>
-        {pmMode === "deployed" && (
-          <span style={{ fontSize: 9, color: "#4ade80" }}>
-            staked ✓
-          </span>
-        )}
+        <span style={{ fontSize: 9, color: "#4ade80" }}>staked ✓</span>
       </div>
 
-      {/* ── Wallet + Publish ───────────────────────────────────────────────── */}
+      {/* ── Wallet + Publish ─────────────────────────────────────────────────── */}
       <div style={{ display: "flex", flexDirection: "column", gap: 10, paddingTop: 4 }}>
 
-        {/* Wallet status */}
         {wallet.state.connected ? (
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <div style={{ width: 7, height: 7, borderRadius: "50%", background: "#4ade80" }} />
@@ -551,13 +383,8 @@ export function PublishForm({ networkId }: { networkId: NetworkId }) {
                 wrong network — click Publish to switch
               </span>
             )}
-            <button
-              onClick={wallet.disconnect}
-              style={{
-                marginLeft: "auto", background: "none", border: "none",
-                color: "#444", cursor: "pointer", fontSize: 10, padding: "2px 6px",
-              }}
-            >
+            <button onClick={wallet.disconnect}
+              style={{ marginLeft: "auto", background: "none", border: "none", color: "#444", cursor: "pointer", fontSize: 10, padding: "2px 6px" }}>
               disconnect
             </button>
           </div>
@@ -569,10 +396,7 @@ export function PublishForm({ networkId }: { networkId: NetworkId }) {
           </div>
         )}
 
-        {/* Publish button */}
-        <button
-          onClick={handlePublish}
-          disabled={!canPublish}
+        <button onClick={handlePublish} disabled={!canPublish}
           style={{
             padding: "12px 0",
             fontFamily: "'JetBrains Mono', monospace", fontSize: 13, fontWeight: 700,
@@ -586,18 +410,17 @@ export function PublishForm({ networkId }: { networkId: NetworkId }) {
           {publishing
             ? (publishStep || "publishing…")
             : !testResult?.ok
-            ? "run test first"
+            ? "test endpoint first"
             : !wallet.state.connected
             ? "🔗 connect wallet + publish"
             : wrongNetwork
             ? `switch to ${NETWORKS[selectedNet].label}`
-            : pmMode === "deployed"
-            ? `publish on-chain (${gasSharePct}% gas sponsored) →`
-            : "publish on-chain →"
+            : parseFloat(gasDeposit) > 0
+            ? `publish + fund ${gasDeposit} ${net.currency} gas budget →`
+            : "publish on-chain (no gas budget) →"
           }
         </button>
 
-        {/* Publish error */}
         {publishError && (
           <div style={{
             padding: "10px 12px", borderRadius: 6,
@@ -608,7 +431,6 @@ export function PublishForm({ networkId }: { networkId: NetworkId }) {
           </div>
         )}
 
-        {/* Publish success */}
         {publishResult && (
           <div style={{
             padding: "14px 16px", borderRadius: 8,
@@ -620,12 +442,12 @@ export function PublishForm({ networkId }: { networkId: NetworkId }) {
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               {[
-                ["Network",  NETWORKS[publishResult.networkId].label],
-                ["URL",      url],
-                ["Price",    "$" + price + " USDC"],
-                ["Paymaster", paymasterAddress.slice(0, 12) + "…"],
-                ["Gas share", pmMode === "deployed" ? `${gasSharePct}% (on-chain)` : "—"],
-                ["Tx hash",  publishResult.txHash],
+                ["Network",   NETWORKS[publishResult.networkId].label],
+                ["URL",       url],
+                ["Price",     "$" + price + " USDC"],
+                ["Gas share", `${gasSharePct}% (${parseFloat(gasDeposit) > 0 ? gasDeposit + " " + net.currency + " deposited" : "no deposit"})`],
+                ["Paymaster", paymasterAddress.slice(0, 14) + "…"],
+                ["Tx hash",   publishResult.txHash],
               ].map(([k, v]) => (
                 <div key={k} style={{ display: "flex", gap: 8 }}>
                   <span style={{ fontSize: 10, color: "#555", width: 70, flexShrink: 0 }}>{k}</span>
@@ -633,11 +455,9 @@ export function PublishForm({ networkId }: { networkId: NetworkId }) {
                 </div>
               ))}
             </div>
-            <a
-              href={NETWORKS[publishResult.networkId].explorerTx(publishResult.txHash)}
+            <a href={NETWORKS[publishResult.networkId].explorerTx(publishResult.txHash)}
               target="_blank" rel="noreferrer"
-              style={{ fontSize: 11, color: net.color, marginTop: 2 }}
-            >
+              style={{ fontSize: 11, color: net.color, marginTop: 2 }}>
               view on {networkId === "hedera" ? "HashScan" : "Basescan"} ↗
             </a>
           </div>

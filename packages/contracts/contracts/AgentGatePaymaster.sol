@@ -6,147 +6,177 @@ import "@account-abstraction/contracts/interfaces/IEntryPoint.sol";
 
 /**
  * @title AgentGatePaymaster
- * @notice ERC-4337 Paymaster that sponsors gas for AI agents calling registered endpoints.
+ * @notice Shared ERC-4337 Paymaster. Each publisher deposits ETH for their own
+ *         endpoints and sets a gas-share %. This creates real market competition:
  *
- *  Publisher gas-share model
- *  ─────────────────────────
- *  Each endpoint has a `gasShareBps` (0–10 000 = 0–100%).
- *  When an agent includes the endpoint hash in `paymasterData`, the paymaster:
- *    – covers 100% of the gas cost from its EntryPoint deposit (ERC-4337 requirement)
- *    – but charges only `(maxCost * gasShareBps / 10 000)` against the daily budget
+ *         – Publisher A: 0.1 ETH deposited, 100% share → best UX, depletes faster
+ *         – Publisher B: 0.1 ETH deposited,  50% share → half gas sponsored, lasts 2×
+ *         – Publisher C: 0.001 ETH, 100%              → full sponsorship, few calls
  *
- *  A publisher at 100% is most attractive (all gas sponsored, full daily budget used).
- *  A publisher at 50% uses only half the daily budget per call → twice as many calls/day.
+ *         Agents see which endpoints have balance and prefer those with higher share.
+ *         No one else can spend a publisher's deposit.
  *
- *  paymasterData layout (bytes passed after the standard 52-byte header):
- *    bytes[0:32]  = bytes32 endpointHash  (keccak256 of endpoint URL)
+ *  paymasterData layout (bytes[52:84] of paymasterAndData):
+ *    bytes32  endpointHash  =  keccak256(abi.encodePacked(url))
  */
 contract AgentGatePaymaster is BasePaymaster {
-    // ── Daily budget tracking ───────────────────────────────────────────────
-    uint256 public dailyBudget;
-    uint256 public dailySpent;
-    uint256 public lastResetTimestamp;
+
+    // ── Per-endpoint state ──────────────────────────────────────────────────
+    /// @notice ETH deposited by each publisher for their endpoint's gas budget.
+    mapping(bytes32 => uint256) public endpointBalance;
+
+    /// @notice Gas share in bps (0–10 000). Default = 10 000 (100%).
+    mapping(bytes32 => uint16) public endpointGasShareBps;
+
+    /// @notice Who can withdraw the endpoint's deposit (the depositor).
+    mapping(bytes32 => address) public endpointOwner;
 
     // ── Global stats ────────────────────────────────────────────────────────
     uint256 public totalSponsored;
     uint256 public totalCalls;
 
-    // ── Per-endpoint config ─────────────────────────────────────────────────
-    /// @notice Gas share in basis points (0–10 000). Default = 10 000 (100%).
-    mapping(bytes32 => uint16) public endpointSponsorshipBps;
-
     // ── Events ──────────────────────────────────────────────────────────────
+    event EndpointFunded(bytes32 indexed endpointHash, address indexed funder, uint256 amount);
+    event EndpointGasShareSet(bytes32 indexed endpointHash, uint16 bps);
+    event EndpointWithdraw(bytes32 indexed endpointHash, address indexed to, uint256 amount);
     event GasSponsored(
         address indexed agent,
         bytes32 indexed endpointHash,
         uint256 gasUsed,
-        uint16  sponsorshipBps
+        uint16  gasShareBps
     );
-    event DailyBudgetSet(uint256 newBudget);
-    event EndpointSponsorshipSet(bytes32 indexed endpointHash, uint16 bps);
-    event BudgetReset(uint256 timestamp);
 
-    constructor(
-        IEntryPoint _entryPoint,
-        uint256 _dailyBudget
-    ) BasePaymaster(_entryPoint) {
-        dailyBudget        = _dailyBudget;
-        lastResetTimestamp = block.timestamp;
-    }
+    constructor(IEntryPoint _entryPoint) BasePaymaster(_entryPoint) {}
 
     // ── Publisher interface ─────────────────────────────────────────────────
 
     /**
-     * @notice Set gas sponsorship % for an endpoint by URL.
-     *         Any address can call — publisher sets this for their own endpoints.
-     * @param  url URL of the endpoint (keccak256 used as key)
-     * @param  bps Sponsorship in basis points (0 = no sponsorship, 10000 = 100%)
+     * @notice Deposit ETH for an endpoint's gas budget (by URL).
+     *         Anyone can top-up any endpoint, but only the first depositor
+     *         (the endpoint owner) can withdraw or change the gas share.
      */
-    function setEndpointSponsorshipByUrl(string calldata url, uint16 bps) external {
-        require(bps <= 10000, "bps > 10000");
+    function depositForEndpoint(string calldata url) external payable {
+        require(msg.value > 0, "No ETH sent");
         bytes32 hash = keccak256(abi.encodePacked(url));
-        endpointSponsorshipBps[hash] = bps;
-        emit EndpointSponsorshipSet(hash, bps);
+        _depositForHash(hash);
+    }
+
+    function depositForEndpointHash(bytes32 endpointHash) external payable {
+        require(msg.value > 0, "No ETH sent");
+        _depositForHash(endpointHash);
+    }
+
+    function _depositForHash(bytes32 hash) internal {
+        if (endpointOwner[hash] == address(0)) {
+            endpointOwner[hash] = msg.sender;
+        }
+        endpointBalance[hash] += msg.value;
+        // Forward ETH into the EntryPoint so it's available for gas payments
+        entryPoint.depositTo{value: msg.value}(address(this));
+        emit EndpointFunded(hash, msg.sender, msg.value);
     }
 
     /**
-     * @notice Set gas sponsorship % for an endpoint by pre-computed hash.
+     * @notice Set gas share % for your endpoint (only endpoint owner).
+     * @param  url URL of the endpoint
+     * @param  bps 0–10 000 (0% = no sponsorship, 10000 = full sponsorship)
      */
-    function setEndpointSponsorship(bytes32 endpointHash, uint16 bps) external {
+    function setGasShare(string calldata url, uint16 bps) external {
         require(bps <= 10000, "bps > 10000");
-        endpointSponsorshipBps[endpointHash] = bps;
-        emit EndpointSponsorshipSet(endpointHash, bps);
+        bytes32 hash = keccak256(abi.encodePacked(url));
+        require(endpointOwner[hash] == address(0) || endpointOwner[hash] == msg.sender, "Not endpoint owner");
+        endpointGasShareBps[hash] = bps;
+        emit EndpointGasShareSet(hash, bps);
     }
 
-    // ── Owner-only config ───────────────────────────────────────────────────
-
-    function setDailyBudget(uint256 _dailyBudget) external onlyOwner {
-        dailyBudget = _dailyBudget;
-        emit DailyBudgetSet(_dailyBudget);
+    function setGasShareByHash(bytes32 endpointHash, uint16 bps) external {
+        require(bps <= 10000, "bps > 10000");
+        require(endpointOwner[endpointHash] == address(0) || endpointOwner[endpointHash] == msg.sender, "Not endpoint owner");
+        endpointGasShareBps[endpointHash] = bps;
+        emit EndpointGasShareSet(endpointHash, bps);
     }
 
-    function getRemainingBudget() external view returns (uint256) {
-        if (block.timestamp >= lastResetTimestamp + 1 days) return dailyBudget;
-        return dailyBudget > dailySpent ? dailyBudget - dailySpent : 0;
+    /**
+     * @notice Withdraw remaining balance for your endpoint.
+     */
+    /**
+     * @notice Withdraw remaining endpoint balance.
+     *         Pulls from EntryPoint (owner only — prevents race conditions).
+     */
+    function withdrawEndpointBalance(string calldata url, address payable to) external onlyOwner {
+        bytes32 hash = keccak256(abi.encodePacked(url));
+        uint256 amount = endpointBalance[hash];
+        require(amount > 0, "No balance");
+        endpointBalance[hash] = 0;
+        entryPoint.withdrawTo(to, amount);
+        emit EndpointWithdraw(hash, to, amount);
     }
 
-    function getTotalSponsored() external view returns (uint256) {
-        return totalSponsored;
+    /**
+     * @notice Convenience: deposit ETH AND set gas share in one call.
+     */
+    function fundAndSetGasShare(string calldata url, uint16 bps) external payable {
+        require(msg.value > 0, "No ETH sent");
+        require(bps <= 10000, "bps > 10000");
+        bytes32 hash = keccak256(abi.encodePacked(url));
+        if (endpointOwner[hash] == address(0)) {
+            endpointOwner[hash] = msg.sender;
+        }
+        require(endpointOwner[hash] == msg.sender, "Not endpoint owner");
+        endpointBalance[hash] += msg.value;
+        endpointGasShareBps[hash] = bps;
+        entryPoint.depositTo{value: msg.value}(address(this));
+        emit EndpointFunded(hash, msg.sender, msg.value);
+        emit EndpointGasShareSet(hash, bps);
     }
 
-    function resetDailyBudget() external {
-        require(block.timestamp >= lastResetTimestamp + 1 days, "Too early");
-        dailySpent         = 0;
-        lastResetTimestamp = block.timestamp;
-        emit BudgetReset(block.timestamp);
-    }
+    // ── Owner utils ─────────────────────────────────────────────────────────
+
+    function getTotalSponsored() external view returns (uint256) { return totalSponsored; }
 
     function withdrawFunds(address payable recipient, uint256 amount) external onlyOwner {
         entryPoint.withdrawTo(recipient, amount);
     }
 
-    // ── ERC-4337 validation ─────────────────────────────────────────────────
+    // ── ERC-4337 Paymaster validation ───────────────────────────────────────
 
     /**
      * @dev paymasterAndData layout (ERC-4337 v0.7):
      *   [0:20]  paymaster address
      *   [20:36] paymasterVerificationGasLimit (uint128)
      *   [36:52] paymasterPostOpGasLimit (uint128)
-     *   [52:84] endpointHash (bytes32)  ← our custom data
+     *   [52:84] endpointHash (bytes32) ← publisher's endpoint
      */
     function _validatePaymasterUserOp(
         PackedUserOperation calldata userOp,
         bytes32 userOpHash,
         uint256 maxCost
     ) internal override returns (bytes memory context, uint256 validationData) {
-        // ── Decode endpoint hash from paymasterData ──────────────────────────
+        // Decode endpoint hash
         bytes32 endpointHash;
         if (userOp.paymasterAndData.length >= 84) {
             endpointHash = bytes32(userOp.paymasterAndData[52:84]);
         }
 
-        // ── Resolve sponsorship bps (default 100% if not set) ───────────────
-        uint16 bps = endpointHash != bytes32(0) ? endpointSponsorshipBps[endpointHash] : 0;
-        if (bps == 0) bps = 10000; // default: full sponsorship
+        // Resolve gas share (default 100% if never set)
+        uint16 bps = endpointGasShareBps[endpointHash];
+        if (bps == 0) bps = 10000;
 
-        // ── Reset daily budget if 24h passed ────────────────────────────────
-        if (block.timestamp >= lastResetTimestamp + 1 days) {
-            dailySpent         = 0;
-            lastResetTimestamp = block.timestamp;
-            emit BudgetReset(block.timestamp);
-        }
-
-        // ── Budget check: only count the sponsored portion ──────────────────
+        // How much of the gas cost the publisher is covering this call
         uint256 coveredCost = (maxCost * bps) / 10000;
-        require(dailySpent + coveredCost <= dailyBudget, "Daily gas budget exceeded");
-        dailySpent += coveredCost;
 
-        context        = abi.encode(userOp.sender, userOpHash, maxCost, bps, endpointHash);
+        // Publisher's endpoint must have enough balance
+        require(endpointBalance[endpointHash] >= coveredCost, "Endpoint out of gas budget");
+
+        // Reserve (optimistically; refunded in postOp with actual cost)
+        endpointBalance[endpointHash] -= coveredCost;
+
+        context        = abi.encode(userOp.sender, userOpHash, coveredCost, bps, endpointHash);
         validationData = 0;
     }
 
     /**
-     * @dev Post-op: refine budget with actual gas, emit event.
+     * @dev Post-op: settle actual vs reserved cost, emit event.
      */
     function _postOp(
         PostOpMode /*mode*/,
@@ -156,24 +186,22 @@ contract AgentGatePaymaster is BasePaymaster {
     ) internal override {
         (
             address agent,
-            bytes32 userOpHash,
-            uint256 maxCost,
+            ,
+            uint256 reservedCost,
             uint16  bps,
             bytes32 endpointHash
         ) = abi.decode(context, (address, bytes32, uint256, uint16, bytes32));
 
-        // Covered costs at max vs actual
-        uint256 coveredMax    = (maxCost      * bps) / 10000;
-        uint256 coveredActual = (actualGasCost * bps) / 10000;
+        uint256 actualCovered = (actualGasCost * bps) / 10000;
 
-        // Refund over-reserved budget
-        if (coveredMax > coveredActual && dailySpent >= coveredMax - coveredActual) {
-            dailySpent -= (coveredMax - coveredActual);
+        // Refund over-reserved balance back to the endpoint
+        if (reservedCost > actualCovered) {
+            endpointBalance[endpointHash] += reservedCost - actualCovered;
         }
 
-        totalSponsored += coveredActual;
+        totalSponsored += actualCovered;
         totalCalls     += 1;
 
-        emit GasSponsored(agent, endpointHash != bytes32(0) ? endpointHash : userOpHash, coveredActual, bps);
+        emit GasSponsored(agent, endpointHash, actualCovered, bps);
     }
 }

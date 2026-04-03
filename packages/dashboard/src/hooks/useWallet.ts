@@ -83,9 +83,16 @@ export function useWallet() {
     }
   }, []);
 
-  /** Write a contract function. Returns tx hash. */
+  /** Write a contract function. Returns tx hash. value = optional ETH to send (payable). */
   const writeContract = useCallback(
-    async (networkId: NetworkId, contractAddr: `0x${string}`, abi: any[], functionName: string, args: any[]) => {
+    async (
+      networkId: NetworkId,
+      contractAddr: `0x${string}`,
+      abi: any[],
+      functionName: string,
+      args: any[],
+      value?: bigint
+    ) => {
       if (!window.ethereum || !state.address) throw new Error("Wallet not connected");
 
       const chain = networkId === "hedera" ? hederaTestnet : baseSepolia;
@@ -98,6 +105,7 @@ export function useWallet() {
         functionName,
         args,
         account: state.address,
+        ...(value !== undefined ? { value } : {}),
       });
 
       const hash = await walletClient.writeContract(request);
