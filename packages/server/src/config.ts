@@ -5,9 +5,11 @@ dotenv.config({ path: path.resolve(__dirname, "../../../.env") });
 
 export const config = {
   port: Number(process.env.PORT) || 4021,
+  // Official x402 facilitator — supports eip155:84532 (Base Sepolia)
+  // World Chain facilitator (x402-worldchain.vercel.app) has no /supported endpoint
   facilitatorUrl:
     process.env.FACILITATOR_URL ||
-    "https://x402-worldchain.vercel.app/facilitator",
+    "https://www.x402.org/facilitator",
   publisherAddress:
     process.env.PUBLISHER_ADDRESS ||
     "0x000000000000000000000000000000000000dead",

@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { HTTPFacilitatorClient } from "@x402/core/http";
+import { LocalFacilitatorClient } from "./services/localFacilitator";
 import { ExactEvmScheme } from "@x402/evm/exact/server";
 import {
   paymentMiddlewareFromHTTPServer,
@@ -35,9 +36,9 @@ const hooks = createAgentkitHooks({
 });
 
 // ── x402 resource server ──────────────────────────────────────────────────────
-const facilitatorClient = new HTTPFacilitatorClient({
-  url: config.facilitatorUrl,
-});
+// LocalFacilitatorClient: supports World Chain + Base without needing a live facilitator
+// (demo mode — simulates settlement for non-Base-Sepolia chains)
+const facilitatorClient = new LocalFacilitatorClient() as any;
 
 // Scheme for World Chain
 const worldEvmScheme = new ExactEvmScheme().registerMoneyParser(
