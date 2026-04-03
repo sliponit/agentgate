@@ -1,13 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import { NetworkId, NETWORKS, DEPLOYMENTS } from "../lib/chains";
-import { useGasSponsoredEvents } from "../hooks/useGasSponsoredEvents";
+import { useGasSponsoredEvents, type GasSponsoredEvent } from "../hooks/useGasSponsoredEvents";
 
 interface Props {
   networkId: NetworkId;
   totalCalls: number;
 }
 
-interface Field { key: string; value: string; highlight?: boolean }
+interface Field {
+  key: string;
+  value: string;
+  highlight?: boolean;
+  live?: boolean; // marks fields pulled from a real on-chain event
+}
 
 interface Step {
   id: number;
@@ -19,15 +24,31 @@ interface Step {
   request: { title: string; fields: Field[] };
   response: { title: string; fields: Field[] };
   note: string;
+  hasLiveData?: boolean;
 }
 
-function buildSteps(networkId: NetworkId): Step[] {
-  const dep = DEPLOYMENTS[networkId];
-  const net = NETWORKS[networkId];
-  const pm  = dep.paymaster.slice(0, 8) + "…" + dep.paymaster.slice(-4);
-  const reg = dep.publisherRegistry.slice(0, 8) + "…" + dep.publisherRegistry.slice(-4);
-  const _ep  = dep.entryPoint.slice(0, 8) + "…" + dep.entryPoint.slice(-4);
-  void _ep;
+function fmt(addr: string) { return addr.slice(0, 10) + "…" + addr.slice(-4); }
+
+function buildSteps(
+  networkId: NetworkId,
+  ev: GasSponsoredEvent | null
+): Step[] {
+  const dep  = DEPLOYMENTS[networkId];
+  const net  = NETWORKS[networkId];
+  const pm   = fmt(dep.paymaster);
+  const reg  = fmt(dep.publisherRegistry);
+  const isLive = ev !== null;
+
+  // Real values when available, demo placeholders otherwise
+  const agentAddr     = isLive ? fmt(ev!.agent)        : fmt(dep.deployer) + " (demo)";
+  const txHashShort   = isLive ? fmt(ev!.txHash)       : "—";
+  const endpointHash  = isLive ? fmt(ev!.endpointHash) : "keccak256('https://…/weather')";
+  const gasUsed       = isLive ? ev!.gasUsed.toLocaleString()         : "~180,000";
+  const gasCostEth    = isLive
+    ? (Number(ev!.gasUsed) / 1e18).toFixed(8) + " " + net.currency
+    : "~0.000054 " + net.currency;
+  const bpsPct        = isLive ? Math.round(ev!.sponsorshipBps / 100) : 100;
+  const remainingBudget = isLive ? "—" : "0.0097 " + net.currency;
 
   return [
     {
@@ -35,180 +56,180 @@ function buildSteps(networkId: NetworkId): Step[] {
       from: "AI Agent", fromIcon: "🤖",
       to: "Bundler",    toIcon: "📦",
       label: "UserOperation submitted",
+      hasLiveData: isLive,
       request: {
         title: "→ UserOperation",
         fields: [
-          { key: "sender",          value: dep.deployer.slice(0, 10) + "…" },
-          { key: "callData",        value: "callWeather('cannes')", highlight: true },
-          { key: "paymasterAndData",value: pm, highlight: true },
-          { key: "maxFeePerGas",    value: net.chainId === 296 ? "1020 Gwei" : "0.05 Gwei" },
-          { key: "nonce",           value: "0x04" },
+          { key: "sender",           value: agentAddr,   highlight: true, live: isLive },
+          { key: "callData",         value: "0x…(execute)", highlight: true },
+          { key: "paymasterAndData", value: pm + " + endpointHash", highlight: true },
+          { key: "maxFeePerGas",     value: net.chainId === 296 ? "1200 Gwei" : "≈0.006 Gwei" },
         ],
       },
       response: {
-        title: "← Acknowledgement",
+        title: "← Bundler ack",
         fields: [
-          { key: "status",         value: "queued" },
-          { key: "bundled",        value: "true" },
-          { key: "estimatedExec",  value: "~2s" },
+          { key: "userOpHash", value: isLive ? fmt(ev!.endpointHash) : "pending", live: isLive },
+          { key: "status",     value: "queued ✓" },
+          { key: "eta",        value: isLive ? "confirmed" : "~2s" },
         ],
       },
-      note: "Agent declares intent. Gas fee will be paid by Paymaster, not agent.",
+      note: "Agent submits a UserOp with paymasterData = endpoint hash. Zero native token needed.",
     },
     {
       id: 1,
       from: "Bundler",        fromIcon: "📦",
       to: "EntryPoint v0.7", toIcon: "⚡",
-      label: "handleOps() called",
+      label: "handleOps() on-chain",
       request: {
-        title: "→ handleOps(userOps[], beneficiary)",
+        title: "→ handleOps(ops, beneficiary)",
         fields: [
-          { key: "ops.length",    value: "1" },
-          { key: "beneficiary",   value: dep.deployer.slice(0, 10) + "…" },
-          { key: "gasLimit",      value: "3,000,000" },
+          { key: "ops.length",  value: "1" },
+          { key: "beneficiary", value: fmt(dep.deployer) },
+          { key: "txHash",      value: isLive ? fmt(ev!.txHash) : "(pending)", live: isLive },
         ],
       },
       response: {
-        title: "← Execution triggered",
+        title: "← EntryPoint routes",
         fields: [
-          { key: "validates", value: "paymasterAndData ✓" },
-          { key: "calls",     value: "validatePaymasterUserOp()" },
+          { key: "calls",   value: "validatePaymasterUserOp()" },
+          { key: "then",    value: "executeUserOp()" },
+          { key: "finally", value: "_postOp()" },
         ],
       },
-      note: "Bundler submits the batch. EntryPoint orchestrates validation + execution.",
+      note: "Bundler packs the op into a tx and calls EntryPoint.handleOps.",
     },
     {
       id: 2,
-      from: "EntryPoint v0.7",        fromIcon: "⚡",
+      from: "EntryPoint v0.7",   fromIcon: "⚡",
       to: "AgentGate Paymaster", toIcon: "🛡️",
       label: "validatePaymasterUserOp()",
+      hasLiveData: isLive,
       request: {
         title: "→ validatePaymasterUserOp",
         fields: [
-          { key: "userOpHash", value: "0xabcd…1234" },
-          { key: "maxCost",    value: "0.0003 " + net.currency, highlight: true },
-          { key: "sender",     value: dep.deployer.slice(0, 10) + "…" },
+          { key: "endpointHash", value: endpointHash,  highlight: true, live: isLive },
+          { key: "maxCost",      value: "≈" + gasCostEth, highlight: true },
+          { key: "sender",       value: agentAddr, live: isLive },
         ],
       },
       response: {
-        title: "← Validation result",
+        title: "← Validation data",
         fields: [
-          { key: "validationData", value: "0 (valid)", highlight: true },
-          { key: "context",        value: "abi.encode(sender, hash, maxCost)" },
-          { key: "dailyRemaining", value: "0.0097 " + net.currency },
+          { key: "validationData",  value: "0 (valid ✓)", highlight: true },
+          { key: "sponsorshipBps",  value: `${bpsPct}% (${bpsPct * 100} bps)`, highlight: true, live: isLive },
+          { key: "dailyRemaining",  value: remainingBudget },
         ],
       },
-      note: "Paymaster checks daily budget. Signs off on gas sponsorship.",
+      note: `Paymaster reads endpointSponsorshipBps[hash] = ${bpsPct * 100} bps. Budget check passes. Gas approved.`,
     },
     {
       id: 3,
       from: "AgentGate Paymaster", fromIcon: "🛡️",
-      to: "PublisherRegistry",   toIcon: "📋",
-      label: "endpoint lookup",
+      to: "PublisherRegistry",     toIcon: "📋",
+      label: "endpoint config lookup",
       request: {
-        title: "→ registeredEndpoints[hash]",
+        title: "→ endpointSponsorshipBps[hash]",
         fields: [
-          { key: "key",  value: "keccak256('https://…/weather')", highlight: true },
-          { key: "addr", value: reg },
+          { key: "endpointHash", value: endpointHash, live: isLive },
+          { key: "registry",     value: reg },
         ],
       },
       response: {
-        title: "← Endpoint status",
+        title: "← Sponsorship config",
         fields: [
-          { key: "registered", value: "true", highlight: true },
-          { key: "active",     value: "true" },
-          { key: "paymaster",  value: pm },
+          { key: "bps",          value: `${bpsPct * 100}`, highlight: true, live: isLive },
+          { key: "coveredCost",  value: `maxCost × ${bpsPct}%`, highlight: true },
+          { key: "paymaster",    value: pm },
         ],
       },
-      note: "Paymaster verifies the target endpoint is registered and active.",
+      note: "Paymaster resolves the publisher's gas share. Only that portion counts against daily budget.",
     },
     {
       id: 4,
       from: "EntryPoint v0.7", fromIcon: "⚡",
-      to: "API Endpoint",    toIcon: "🌐",
-      label: "HTTP call executed",
+      to: "SmartAccount",      toIcon: "💼",
+      label: "executeUserOp()",
       request: {
-        title: "→ GET /api/weather/cannes",
+        title: "→ execute(target, value, callData)",
         fields: [
-          { key: "X-Payment-Response", value: "eip3009:…signed…", highlight: true },
-          { key: "agentkit",           value: "base64:SIWE…proof…" },
-          { key: "network",            value: net.label },
+          { key: "sender",   value: agentAddr, live: isLive },
+          { key: "target",   value: fmt(dep.deployer) },
+          { key: "value",    value: "0 " + net.currency },
+          { key: "callData", value: "0x (no-op)" },
         ],
       },
       response: {
-        title: "← HTTP 200 OK",
+        title: "← Execution result",
         fields: [
-          { key: "city",    value: "Cannes", highlight: true },
-          { key: "temp",    value: "22°C" },
-          { key: "payment", value: "verified ✓" },
-          { key: "gasBy",   value: "Publisher Paymaster", highlight: true },
+          { key: "success",    value: "true ✓",        highlight: true },
+          { key: "returnData", value: "0x" },
+          { key: "txHash",     value: isLive ? fmt(ev!.txHash) : "(pending)", live: isLive },
         ],
       },
-      note: "API verifies the x402 payment header and AgentKit proof, returns data.",
+      note: "SmartAccount executes the agent's intent. No native token spent by the agent.",
     },
     {
       id: 5,
-      from: "EntryPoint v0.7",  fromIcon: "⚡",
+      from: "EntryPoint v0.7",   fromIcon: "⚡",
       to: "AgentGate Paymaster", toIcon: "🛡️",
-      label: "postOp() — finalize gas",
+      label: "_postOp() — finalize",
+      hasLiveData: isLive,
       request: {
-        title: "→ postOp(mode, context, actualGasCost)",
+        title: "→ _postOp(mode, context, actualGasCost)",
         fields: [
-          { key: "mode",          value: "opSucceeded" },
-          { key: "actualGasCost", value: "0.00018 " + net.currency, highlight: true },
-          { key: "overpaid",      value: "0.00012 " + net.currency },
+          { key: "mode",           value: "opSucceeded" },
+          { key: "actualGasCost",  value: gasCostEth,   highlight: true, live: isLive },
+          { key: "sponsorshipBps", value: `${bpsPct * 100}`,             live: isLive },
         ],
       },
       response: {
-        title: "← Stats updated",
+        title: "← Stats updated + event emitted",
         fields: [
-          { key: "dailySpent",     value: "+0.00018 " + net.currency },
-          { key: "totalCalls",     value: "+1" },
-          { key: "overpaidRefund", value: "0.00012 " + net.currency + " → budget", highlight: true },
+          { key: "gasUsed",    value: gasUsed,         highlight: true, live: isLive },
+          { key: "totalCalls", value: "+1" },
+          { key: "event",      value: `GasSponsored(${agentAddr}, ${bpsPct}%)`, live: isLive },
         ],
       },
-      note: "EntryPoint calls postOp with actual cost. Paymaster refunds unused gas to budget.",
+      note: isLive
+        ? `Real GasSponsored event emitted on-chain: gas=${gasUsed}, bps=${bpsPct * 100}`
+        : "EntryPoint calls _postOp with actual cost. Paymaster updates budget and emits event.",
     },
     {
       id: 6,
-      from: "Bundler",   fromIcon: "📦",
-      to: "AI Agent",   toIcon: "🤖",
-      label: "Response delivered",
+      from: "Bundler", fromIcon: "📦",
+      to: "AI Agent",  toIcon: "🤖",
+      label: "Receipt delivered",
+      hasLiveData: isLive,
       request: {
-        title: "→ ExecutionResult",
+        title: "→ UserOperationReceipt",
         fields: [
-          { key: "success",    value: "true", highlight: true },
-          { key: "returnData", value: `{ city: "Cannes", temp: 22 }` },
-          { key: "gasUsed",    value: "180,000" },
-          { key: "gasPaidBy",  value: "AgentGate Paymaster", highlight: true },
-          { key: "agentPaid",  value: "0 " + net.currency + " 🎉" },
+          { key: "success",   value: "true ✓",                  highlight: true },
+          { key: "txHash",    value: isLive ? fmt(ev!.txHash) : "—", highlight: true, live: isLive },
+          { key: "gasUsed",   value: gasUsed,                        live: isLive },
+          { key: "gasPaidBy", value: "AgentGate Paymaster",    highlight: true },
+          { key: "agentPaid", value: "0 " + net.currency + " 🎉" },
         ],
       },
       response: {
-        title: "← Agent receives data",
+        title: "← Agent gets data",
         fields: [
           { key: "status",  value: "200 OK" },
-          { key: "latency", value: "~2.1s" },
-          { key: "cost",    value: "$0.00 gas + $0.01 USDC", highlight: true },
+          { key: "cost",    value: isLive ? `0 ${net.currency} gas (${bpsPct}% sponsored)` : `$0.00 gas + $0.01 USDC`, highlight: true, live: isLive },
+          { key: "latency", value: isLive ? "on-chain ✓" : "~2.1s" },
         ],
       },
-      note: "Agent gets the API response. Paid $0.01 USDC, zero gas management.",
+      note: isLive
+        ? `Confirmed on-chain. TX: ${fmt(ev!.txHash)}. Agent paid zero gas.`
+        : "Agent receives response. Paid $0.01 USDC for data, zero gas management needed.",
     },
   ];
 }
 
 function PayloadBox({
-  title,
-  fields,
-  color,
-  visible,
-  delay,
+  title, fields, color, visible, delay,
 }: {
-  title: string;
-  fields: Field[];
-  color: string;
-  visible: boolean;
-  delay: number;
+  title: string; fields: Field[]; color: string; visible: boolean; delay: number;
 }) {
   const [show, setShow] = useState(false);
   useEffect(() => {
@@ -221,34 +242,31 @@ function PayloadBox({
   }, [visible, delay]);
 
   return (
-    <div
-      style={{
-        flex: 1,
-        opacity: show ? 1 : 0,
-        transform: show ? "translateY(0)" : "translateY(6px)",
-        transition: "opacity 0.3s ease, transform 0.3s ease",
-        background: "#090909",
-        border: `1px solid ${show ? color + "44" : "#111"}`,
-        borderRadius: 6,
-        padding: "8px 10px",
-        minWidth: 0,
-      }}
-    >
+    <div style={{
+      flex: 1,
+      opacity: show ? 1 : 0,
+      transform: show ? "translateY(0)" : "translateY(6px)",
+      transition: "opacity 0.3s ease, transform 0.3s ease",
+      background: "#090909",
+      border: `1px solid ${show ? color + "44" : "#111"}`,
+      borderRadius: 6,
+      padding: "8px 10px",
+      minWidth: 0,
+    }}>
       <div style={{ fontSize: 10, color, marginBottom: 6, fontWeight: 700, letterSpacing: "0.05em" }}>
         {title}
       </div>
       {fields.map((f) => (
         <div key={f.key} style={{ display: "flex", gap: 6, marginBottom: 3, alignItems: "baseline" }}>
           <span style={{ fontSize: 10, color: "#444", flexShrink: 0, minWidth: 90 }}>{f.key}</span>
-          <span
-            style={{
-              fontSize: 10,
-              color: f.highlight ? "#e5e7eb" : "#666",
-              fontWeight: f.highlight ? 600 : 400,
-              wordBreak: "break-all",
-            }}
-          >
+          <span style={{
+            fontSize: 10,
+            color: f.live ? "#4ade80" : f.highlight ? "#e5e7eb" : "#555",
+            fontWeight: f.highlight || f.live ? 600 : 400,
+            wordBreak: "break-all",
+          }}>
             {f.value}
+            {f.live && <span style={{ fontSize: 8, color: "#4ade8088", marginLeft: 4 }}>⚡</span>}
           </span>
         </div>
       ))}
@@ -257,17 +275,21 @@ function PayloadBox({
 }
 
 export function FlowDiagram({ networkId, totalCalls }: Props) {
-  const [activeStep, setActiveStep] = useState<number>(-1);
-  const [pinnedStep, setPinnedStep] = useState<number | null>(null);
-  const [running, setRunning] = useState(false);
-  const [liveOverride, setLiveOverride] = useState<{ gasUsed: string; txHash: string } | null>(null);
-  const prevEventsLen = useRef(0);
-  const net = NETWORKS[networkId];
-  const steps = buildSteps(networkId);
+  const [activeStep, setActiveStep]     = useState<number>(-1);
+  const [pinnedStep, setPinnedStep]     = useState<number | null>(null);
+  const [running, setRunning]           = useState(false);
+  const [liveEvent, setLiveEvent]       = useState<GasSponsoredEvent | null>(null);
+  const prevEventsLen                   = useRef(0);
+  const net                             = NETWORKS[networkId];
 
   const { events: liveEvents, latestBlock } = useGasSponsoredEvents(networkId);
 
-  const runAnimation = () => {
+  // Use the most recent live event (or null for demo mode)
+  const activeEvent = liveEvent;
+  const steps       = buildSteps(networkId, activeEvent);
+  const isLiveMode  = activeEvent !== null;
+
+  function runAnimation() {
     if (running) return;
     setPinnedStep(null);
     setRunning(true);
@@ -275,68 +297,90 @@ export function FlowDiagram({ networkId, totalCalls }: Props) {
       setTimeout(() => {
         setActiveStep(i);
         if (i === steps.length - 1) {
-          setTimeout(() => {
-            setActiveStep(-1);
-            setRunning(false);
-          }, 1200);
+          setTimeout(() => { setActiveStep(-1); setRunning(false); }, 1400);
         }
-      }, i * 900);
+      }, i * 1000); // 1s per step — feels more realistic than 0.9s
     });
-  };
+  }
 
-  // Trigger animation on new real events
+  // Auto-trigger when new real event arrives
   useEffect(() => {
     if (liveEvents.length > prevEventsLen.current) {
-      const newest = liveEvents[0];
-      setLiveOverride({
-        gasUsed: newest.gasUsed.toLocaleString(),
-        txHash:  newest.txHash,
-      });
-      runAnimation();
+      setLiveEvent(liveEvents[0]);
+      setTimeout(runAnimation, 200);
     }
     prevEventsLen.current = liveEvents.length;
   }, [liveEvents.length]);
 
+  // Initial demo run on mount / network change
   useEffect(() => {
     const t = setTimeout(runAnimation, 600);
     return () => clearTimeout(t);
   }, [networkId]);
 
+  // Also re-trigger on new totalCalls if no live event yet
   useEffect(() => {
-    if (totalCalls > 0) runAnimation();
+    if (totalCalls > 0 && !isLiveMode) runAnimation();
   }, [totalCalls]);
 
   const displayStep = pinnedStep !== null ? pinnedStep : activeStep;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      {/* Header */}
+
+      {/* ── Header ──────────────────────────────────────────────────────────── */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <span style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.1em", color: "#555" }}>
             ERC-4337 Gas Sponsorship Flow
           </span>
-          {/* Live indicator */}
-          {networkId === "baseSepolia" && (
-            <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+
+          {/* Mode badge */}
+          {isLiveMode ? (
+            <div style={{
+              display: "flex", alignItems: "center", gap: 5,
+              padding: "2px 8px", borderRadius: 4,
+              background: "#0a1a0a", border: "1px solid #1a3a1a",
+            }}>
               <div style={{
-                width: 6, height: 6, borderRadius: "50%",
-                background: liveEvents.length > 0 ? "#4ade80" : "#374151",
-                boxShadow: liveEvents.length > 0 ? "0 0 6px #4ade80" : "none",
-                animation: liveEvents.length > 0 ? "pulse-dot 1.5s ease-in-out infinite" : "none",
+                width: 5, height: 5, borderRadius: "50%", background: "#4ade80",
+                boxShadow: "0 0 6px #4ade80",
+                animation: "pulse-dot 1.5s ease-in-out infinite",
               }} />
-              <span style={{ fontSize: 9, color: liveEvents.length > 0 ? "#4ade80" : "#374151", letterSpacing: "0.08em" }}>
-                {liveEvents.length > 0 ? `LIVE · ${liveEvents.length} event${liveEvents.length > 1 ? "s" : ""}` : "WATCHING"}
+              <span style={{ fontSize: 9, color: "#4ade80", fontWeight: 700, letterSpacing: "0.08em" }}>
+                LIVE DATA
               </span>
-              {latestBlock > 0n && (
-                <span style={{ fontSize: 9, color: "#333" }}>
-                  block #{latestBlock.toString()}
-                </span>
-              )}
+            </div>
+          ) : (
+            <div style={{
+              padding: "2px 8px", borderRadius: 4,
+              background: "#111", border: "1px solid #222",
+            }}>
+              <span style={{ fontSize: 9, color: "#444", letterSpacing: "0.08em" }}>DEMO</span>
             </div>
           )}
+
+          {/* Block number when watching */}
+          {networkId === "baseSepolia" && latestBlock > 0n && (
+            <span style={{ fontSize: 9, color: "#2a2a2a" }}>
+              block #{latestBlock.toString()}
+            </span>
+          )}
         </div>
+
         <div style={{ display: "flex", gap: 6 }}>
+          {isLiveMode && (
+            <button
+              onClick={() => { setLiveEvent(null); setPinnedStep(null); }}
+              style={{
+                fontFamily: "'JetBrains Mono', monospace", fontSize: 11,
+                padding: "4px 10px", background: "transparent",
+                border: "1px solid #1a3a1a", borderRadius: 4, color: "#4ade80", cursor: "pointer",
+              }}
+            >
+              ← demo
+            </button>
+          )}
           {pinnedStep !== null && (
             <button
               onClick={() => setPinnedStep(null)}
@@ -355,35 +399,57 @@ export function FlowDiagram({ networkId, totalCalls }: Props) {
             style={{
               fontFamily: "'JetBrains Mono', monospace", fontSize: 11,
               padding: "4px 10px", background: "transparent",
-              border: `1px solid ${running ? "#333" : net.color}`,
-              borderRadius: 4, color: running ? "#555" : net.color, cursor: running ? "default" : "pointer",
+              border: `1px solid ${running ? "#333" : isLiveMode ? "#1a3a1a" : net.color}`,
+              borderRadius: 4,
+              color: running ? "#555" : isLiveMode ? "#4ade80" : net.color,
+              cursor: running ? "default" : "pointer",
               transition: "all 0.2s",
             }}
           >
-            {running ? "▶ running…" : "▶ simulate"}
+            {running ? "▶ running…" : isLiveMode ? "▶ replay last tx" : "▶ simulate"}
           </button>
         </div>
       </div>
 
-      {/* Step list */}
+      {/* ── Live event banner ─────────────────────────────────────────────── */}
+      {isLiveMode && activeEvent && (
+        <div style={{
+          padding: "8px 14px", borderRadius: 6,
+          background: "#060f06", border: "1px solid #1a3a1a",
+          display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
+        }}>
+          <span style={{ fontSize: 10, color: "#4ade80", fontWeight: 700 }}>⚡ REAL ON-CHAIN EVENT</span>
+          <span style={{ fontSize: 10, color: "#555" }}>agent: {fmt(activeEvent.agent)}</span>
+          <span style={{ fontSize: 10, color: "#555" }}>gas: {activeEvent.gasUsed.toLocaleString()}</span>
+          <span style={{ fontSize: 10, color: "#4ade80" }}>{Math.round(activeEvent.sponsorshipBps / 100)}% sponsored</span>
+          <a
+            href={`https://sepolia.basescan.org/tx/${activeEvent.txHash}`}
+            target="_blank" rel="noopener noreferrer"
+            style={{ fontSize: 10, color: net.color, marginLeft: "auto", textDecoration: "none" }}
+          >
+            {fmt(activeEvent.txHash)} ↗
+          </a>
+        </div>
+      )}
+
+      {/* ── Step list ─────────────────────────────────────────────────────── */}
       <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
         {steps.map((step, i) => {
           const isActive = displayStep === i;
-          const isDone = !running ? false : activeStep > i;
+          const isDone   = running && activeStep > i;
           const isPinned = pinnedStep === i;
 
           return (
             <div key={step.id}>
-              {/* Step row */}
               <div
                 onClick={() => setPinnedStep(isPinned ? null : i)}
                 style={{
                   display: "flex", alignItems: "center", gap: 10,
                   padding: "8px 12px",
-                  border: `1px solid ${isActive ? net.color : isDone ? "#222" : "#181818"}`,
+                  border: `1px solid ${isActive ? (isLiveMode ? "#4ade80" : net.color) : isDone ? "#222" : "#181818"}`,
                   borderRadius: 6,
-                  background: isActive ? `${net.color}0d` : isDone ? "#0e0e0e" : "#0a0a0a",
-                  boxShadow: isActive ? `0 0 12px ${net.color}33` : "none",
+                  background: isActive ? (isLiveMode ? "#0a1a0a" : `${net.color}0d`) : isDone ? "#0e0e0e" : "#0a0a0a",
+                  boxShadow: isActive ? `0 0 12px ${isLiveMode ? "#4ade8022" : net.color + "33"}` : "none",
                   transition: "all 0.25s ease",
                   cursor: "pointer",
                   userSelect: "none",
@@ -394,7 +460,7 @@ export function FlowDiagram({ networkId, totalCalls }: Props) {
                   width: 20, height: 20, borderRadius: "50%", flexShrink: 0,
                   display: "flex", alignItems: "center", justifyContent: "center",
                   fontSize: 9, fontWeight: 700,
-                  background: isActive ? net.color : isDone ? "#1e1e1e" : "#111",
+                  background: isActive ? (isLiveMode ? "#4ade80" : net.color) : isDone ? "#1e1e1e" : "#111",
                   color: isActive ? "#000" : isDone ? "#444" : "#333",
                   transition: "all 0.25s",
                 }}>
@@ -407,7 +473,7 @@ export function FlowDiagram({ networkId, totalCalls }: Props) {
                   <span style={{ fontSize: 10, color: isActive ? "#aaa" : "#444", whiteSpace: "nowrap" }}>
                     {step.from}
                   </span>
-                  <span style={{ fontSize: 10, color: isActive ? net.color : "#333" }}>→</span>
+                  <span style={{ fontSize: 10, color: isActive ? (isLiveMode ? "#4ade80" : net.color) : "#333" }}>→</span>
                   <span style={{ fontSize: 13 }}>{step.toIcon}</span>
                   <span style={{ fontSize: 10, color: isActive ? "#aaa" : "#444", whiteSpace: "nowrap" }}>
                     {step.to}
@@ -417,56 +483,57 @@ export function FlowDiagram({ networkId, totalCalls }: Props) {
                 {/* Label */}
                 <span style={{
                   fontSize: 11, fontWeight: 600, flexShrink: 0,
-                  color: isActive ? net.color : isDone ? "#555" : "#333",
+                  color: isActive ? (isLiveMode ? "#4ade80" : net.color) : isDone ? "#555" : "#333",
                   transition: "color 0.25s",
                 }}>
                   {step.label}
                 </span>
 
-                {/* Expand hint */}
+                {/* Live badge on steps with real data */}
+                {step.hasLiveData && isLiveMode && (
+                  <span style={{ fontSize: 8, color: "#4ade80", flexShrink: 0, opacity: 0.7 }}>⚡</span>
+                )}
+
                 <span style={{ fontSize: 9, color: "#2a2a2a", flexShrink: 0 }}>
                   {isPinned ? "▲" : "▼"}
                 </span>
 
-                {/* Pulse dot */}
                 {isActive && (
                   <div style={{
                     width: 6, height: 6, borderRadius: "50%",
-                    background: net.color, flexShrink: 0,
+                    background: isLiveMode ? "#4ade80" : net.color, flexShrink: 0,
                     animation: "pulse-dot 0.8s ease-in-out infinite",
                   }} />
                 )}
               </div>
 
-              {/* Expanded payload — shown when active or pinned */}
+              {/* Expanded payload */}
               {isActive && (
                 <div style={{
                   margin: "4px 0 4px 30px",
                   display: "flex", flexDirection: "column", gap: 6,
                 }}>
-                  {/* Note */}
                   <div style={{
                     fontSize: 10, color: "#555", fontStyle: "italic",
                     padding: "4px 10px",
-                    borderLeft: `2px solid ${net.color}55`,
+                    borderLeft: `2px solid ${isLiveMode ? "#4ade8055" : net.color + "55"}`,
                   }}>
                     {step.note}
                   </div>
-                  {/* Request + Response */}
                   <div style={{ display: "flex", gap: 8 }}>
                     <PayloadBox
                       title={step.request.title}
                       fields={step.request.fields}
-                      color={net.color}
+                      color={isLiveMode ? "#4ade80" : net.color}
                       visible={isActive}
                       delay={0}
                     />
                     <PayloadBox
                       title={step.response.title}
                       fields={step.response.fields}
-                      color="#4ade80"
+                      color={isLiveMode ? "#22c55e" : "#4ade80"}
                       visible={isActive}
-                      delay={450}
+                      delay={500}
                     />
                   </div>
                 </div>
@@ -476,70 +543,76 @@ export function FlowDiagram({ networkId, totalCalls }: Props) {
         })}
       </div>
 
-      {/* Live Events Feed */}
+      {/* ── Live Events Feed ──────────────────────────────────────────────── */}
       {networkId === "baseSepolia" && (
         <div>
           <div style={{
             fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em",
-            color: "#333", marginBottom: 8, paddingTop: 8,
+            color: "#2a2a2a", marginBottom: 8, paddingTop: 8,
             borderTop: "1px solid #111",
           }}>
-            {liveEvents.length > 0 ? "GasSponsored events (on-chain)" : "No on-chain events yet — run: tsx src/send-userop.ts"}
+            {liveEvents.length > 0
+              ? `GasSponsored events — ${liveEvents.length} found (click to replay)`
+              : "No on-chain events yet — run: tsx src/send-userop.ts"}
           </div>
+
           {liveEvents.length === 0 ? (
             <div style={{
-              fontSize: 10, color: "#2a2a2a", fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 10, color: "#2a2a2a",
               background: "#080808", border: "1px solid #111", borderRadius: 6,
-              padding: "10px 14px",
+              padding: "10px 14px", fontFamily: "'JetBrains Mono', monospace",
             }}>
               <span style={{ color: "#333" }}>$ </span>
-              <span style={{ color: "#4ade80" }}>cd packages/agent</span>
+              <span style={{ color: "#4ade80" }}>cd packages/agent && ./node_modules/.bin/tsx src/send-userop.ts</span>
               <br />
-              <span style={{ color: "#333" }}>$ </span>
-              <span style={{ color: "#4ade80" }}>./node_modules/.bin/tsx src/send-userop.ts</span>
-              <br />
-              <span style={{ color: "#555", fontStyle: "italic" }}>
-                # sends a real UserOperation · gas sponsored by AgentGatePaymaster
+              <span style={{ color: "#444", fontStyle: "italic" }}>
+                # sends a real ERC-4337 UserOperation — gas sponsored by AgentGatePaymaster
               </span>
             </div>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              {liveEvents.map((ev) => (
-                <div key={ev.txHash} style={{
-                  display: "flex", gap: 10, alignItems: "center",
-                  background: "#090909", border: "1px solid #1a1a1a",
-                  borderRadius: 5, padding: "6px 10px",
-                  animation: "fadeIn 0.4s ease",
-                }}>
-                  <div style={{
-                    width: 6, height: 6, borderRadius: "50%", flexShrink: 0,
-                    background: "#4ade80",
-                  }} />
-                  <span style={{ fontSize: 9, color: "#4ade80", fontWeight: 700, flexShrink: 0 }}>
-                    GasSponsored
-                  </span>
-                  <span style={{ fontSize: 9, color: "#555", flexShrink: 0 }}>
-                    agent: {ev.agent.slice(0, 8)}…{ev.agent.slice(-4)}
-                  </span>
-                  <span style={{ fontSize: 9, color: "#555", flexShrink: 0 }}>
-                    gas: {ev.gasUsed.toLocaleString()}
-                  </span>
-                  <span style={{ fontSize: 9, color: "#4ade80", flexShrink: 0 }}>
-                    {Math.round(ev.sponsorshipBps / 100)}% sponsored
-                  </span>
-                  <a
-                    href={`https://sepolia.basescan.org/tx/${ev.txHash}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
+            <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+              {liveEvents.map((ev) => {
+                const isSelected = activeEvent?.txHash === ev.txHash;
+                return (
+                  <div
+                    key={ev.txHash}
+                    onClick={() => { setLiveEvent(ev); setTimeout(runAnimation, 150); }}
                     style={{
-                      fontSize: 9, color: net.color, marginLeft: "auto",
-                      textDecoration: "none", flexShrink: 0,
+                      display: "flex", gap: 10, alignItems: "center",
+                      background: isSelected ? "#060f06" : "#090909",
+                      border: `1px solid ${isSelected ? "#1a3a1a" : "#1a1a1a"}`,
+                      borderRadius: 5, padding: "6px 10px",
+                      cursor: "pointer", transition: "all 0.2s",
+                      animation: "fadeIn 0.4s ease",
                     }}
                   >
-                    {ev.txHash.slice(0, 10)}… ↗
-                  </a>
-                </div>
-              ))}
+                    <div style={{ width: 6, height: 6, borderRadius: "50%", flexShrink: 0, background: isSelected ? "#4ade80" : "#374151" }} />
+                    <span style={{ fontSize: 9, color: isSelected ? "#4ade80" : "#555", fontWeight: 700, flexShrink: 0 }}>
+                      GasSponsored
+                    </span>
+                    <span style={{ fontSize: 9, color: "#444", flexShrink: 0 }}>
+                      {fmt(ev.agent)}
+                    </span>
+                    <span style={{ fontSize: 9, color: "#444", flexShrink: 0 }}>
+                      gas: {ev.gasUsed.toLocaleString()}
+                    </span>
+                    <span style={{ fontSize: 9, color: isSelected ? "#4ade80" : "#374151", flexShrink: 0 }}>
+                      {Math.round(ev.sponsorshipBps / 100)}% sponsored
+                    </span>
+                    <span style={{ fontSize: 9, color: "#333", flexShrink: 0 }}>
+                      block #{ev.blockNumber.toString()}
+                    </span>
+                    <a
+                      href={`https://sepolia.basescan.org/tx/${ev.txHash}`}
+                      target="_blank" rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      style={{ fontSize: 9, color: net.color, marginLeft: "auto", textDecoration: "none", flexShrink: 0 }}
+                    >
+                      {fmt(ev.txHash)} ↗
+                    </a>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
