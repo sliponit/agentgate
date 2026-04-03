@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { NetworkId, NETWORKS, DEPLOYMENTS } from "../lib/chains";
+import { useGasSponsoredEvents } from "../hooks/useGasSponsoredEvents";
 
 interface Props {
   networkId: NetworkId;
@@ -259,8 +260,12 @@ export function FlowDiagram({ networkId, totalCalls }: Props) {
   const [activeStep, setActiveStep] = useState<number>(-1);
   const [pinnedStep, setPinnedStep] = useState<number | null>(null);
   const [running, setRunning] = useState(false);
+  const [liveOverride, setLiveOverride] = useState<{ gasUsed: string; txHash: string } | null>(null);
+  const prevEventsLen = useRef(0);
   const net = NETWORKS[networkId];
   const steps = buildSteps(networkId);
+
+  const { events: liveEvents, latestBlock } = useGasSponsoredEvents(networkId);
 
   const runAnimation = () => {
     if (running) return;
@@ -279,6 +284,19 @@ export function FlowDiagram({ networkId, totalCalls }: Props) {
     });
   };
 
+  // Trigger animation on new real events
+  useEffect(() => {
+    if (liveEvents.length > prevEventsLen.current) {
+      const newest = liveEvents[0];
+      setLiveOverride({
+        gasUsed: newest.gasUsed.toLocaleString(),
+        txHash:  newest.txHash,
+      });
+      runAnimation();
+    }
+    prevEventsLen.current = liveEvents.length;
+  }, [liveEvents.length]);
+
   useEffect(() => {
     const t = setTimeout(runAnimation, 600);
     return () => clearTimeout(t);
@@ -294,9 +312,30 @@ export function FlowDiagram({ networkId, totalCalls }: Props) {
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <span style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.1em", color: "#555" }}>
-          ERC-4337 Gas Sponsorship Flow
-        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.1em", color: "#555" }}>
+            ERC-4337 Gas Sponsorship Flow
+          </span>
+          {/* Live indicator */}
+          {networkId === "baseSepolia" && (
+            <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <div style={{
+                width: 6, height: 6, borderRadius: "50%",
+                background: liveEvents.length > 0 ? "#4ade80" : "#374151",
+                boxShadow: liveEvents.length > 0 ? "0 0 6px #4ade80" : "none",
+                animation: liveEvents.length > 0 ? "pulse-dot 1.5s ease-in-out infinite" : "none",
+              }} />
+              <span style={{ fontSize: 9, color: liveEvents.length > 0 ? "#4ade80" : "#374151", letterSpacing: "0.08em" }}>
+                {liveEvents.length > 0 ? `LIVE · ${liveEvents.length} event${liveEvents.length > 1 ? "s" : ""}` : "WATCHING"}
+              </span>
+              {latestBlock > 0n && (
+                <span style={{ fontSize: 9, color: "#333" }}>
+                  block #{latestBlock.toString()}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
         <div style={{ display: "flex", gap: 6 }}>
           {pinnedStep !== null && (
             <button
@@ -437,10 +476,80 @@ export function FlowDiagram({ networkId, totalCalls }: Props) {
         })}
       </div>
 
+      {/* Live Events Feed */}
+      {networkId === "baseSepolia" && (
+        <div>
+          <div style={{
+            fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em",
+            color: "#333", marginBottom: 8, paddingTop: 8,
+            borderTop: "1px solid #111",
+          }}>
+            {liveEvents.length > 0 ? "GasSponsored events (on-chain)" : "No on-chain events yet — run: tsx src/send-userop.ts"}
+          </div>
+          {liveEvents.length === 0 ? (
+            <div style={{
+              fontSize: 10, color: "#2a2a2a", fontFamily: "'JetBrains Mono', monospace",
+              background: "#080808", border: "1px solid #111", borderRadius: 6,
+              padding: "10px 14px",
+            }}>
+              <span style={{ color: "#333" }}>$ </span>
+              <span style={{ color: "#4ade80" }}>cd packages/agent</span>
+              <br />
+              <span style={{ color: "#333" }}>$ </span>
+              <span style={{ color: "#4ade80" }}>./node_modules/.bin/tsx src/send-userop.ts</span>
+              <br />
+              <span style={{ color: "#555", fontStyle: "italic" }}>
+                # sends a real UserOperation · gas sponsored by AgentGatePaymaster
+              </span>
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {liveEvents.map((ev) => (
+                <div key={ev.txHash} style={{
+                  display: "flex", gap: 10, alignItems: "center",
+                  background: "#090909", border: "1px solid #1a1a1a",
+                  borderRadius: 5, padding: "6px 10px",
+                  animation: "fadeIn 0.4s ease",
+                }}>
+                  <div style={{
+                    width: 6, height: 6, borderRadius: "50%", flexShrink: 0,
+                    background: "#4ade80",
+                  }} />
+                  <span style={{ fontSize: 9, color: "#4ade80", fontWeight: 700, flexShrink: 0 }}>
+                    GasSponsored
+                  </span>
+                  <span style={{ fontSize: 9, color: "#555", flexShrink: 0 }}>
+                    agent: {ev.agent.slice(0, 8)}…{ev.agent.slice(-4)}
+                  </span>
+                  <span style={{ fontSize: 9, color: "#555", flexShrink: 0 }}>
+                    gas: {ev.gasUsed.toLocaleString()}
+                  </span>
+                  <a
+                    href={`https://sepolia.basescan.org/tx/${ev.txHash}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      fontSize: 9, color: net.color, marginLeft: "auto",
+                      textDecoration: "none", flexShrink: 0,
+                    }}
+                  >
+                    {ev.txHash.slice(0, 10)}… ↗
+                  </a>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       <style>{`
         @keyframes pulse-dot {
           0%, 100% { opacity: 1; transform: scale(1); }
           50% { opacity: 0.4; transform: scale(0.6); }
+        }
+        @keyframes fadeIn {
+          from { opacity: 0; transform: translateY(-4px); }
+          to   { opacity: 1; transform: translateY(0); }
         }
       `}</style>
     </div>
