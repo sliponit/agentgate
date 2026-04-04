@@ -9,11 +9,12 @@
  */
 
 export interface ProxyConfig {
-  endpointId:     number;
-  backendUrl:     string;
-  injectHeaders:  Record<string, string>;  // e.g. {"x-api-key": "sk-ant-..."}
-  publisherAddr:  string;                  // lowercase
-  registeredAt:   Date;
+  endpointId:      number;
+  backendUrl:      string;
+  injectHeaders:   Record<string, string>;  // e.g. {"x-api-key": "sk-ant-..."}
+  publisherAddr:   string;                  // lowercase
+  requireWorldId:  boolean;                 // if true, agents must provide valid WorldID proof
+  registeredAt:    Date;
 }
 
 const store = new Map<number, ProxyConfig>();

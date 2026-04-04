@@ -107,19 +107,87 @@ export default function App() {
       )}
 
       {view === "publish" && (
-        <section className="panel panel-narrow">
-          <div className="section-header">
-            <span className="section-title">Publish New Endpoint</span>
-            <span className="section-sub">
-              Test your endpoint before registering it on {net.label}. Use presets below for sponsor-ready demos.
-            </span>
-          </div>
-          <PublishForm
-            networkId={activeNet}
-            demoTemplate={publishDemo}
-            onDemoTemplateConsumed={clearPublishDemo}
-          />
-        </section>
+        <main className="publish-grid">
+          <section className="panel">
+            <div className="section-header">
+              <span className="section-title">Publish New Endpoint</span>
+              <span className="section-sub">
+                All endpoints go through AgentGate — x402 payment + WorldID always enforced.
+              </span>
+            </div>
+            <PublishForm
+              networkId={activeNet}
+              demoTemplate={publishDemo}
+              onDemoTemplateConsumed={clearPublishDemo}
+            />
+          </section>
+          <section className="panel publish-sidebar">
+            {/* Contracts */}
+            <div className="sidebar-block">
+              <div className="sidebar-label">Contracts on {net.label}</div>
+              {([
+                ["PublisherRegistry", "0xFBCee3E39A0909549fbc28cac37141d01f946189"],
+                ["AgentGatePaymaster", "0xfbC79b8d8b7659ce21DD37b82f988b9134c262a1"],
+                ["EntryPoint v0.7", "0x0000000071727De22E5E9d8BAf0edAc6f37da032"],
+              ] as const).map(([label, addr]) => (
+                <div key={label} className="sidebar-row">
+                  <span className="sidebar-key">{label}</span>
+                  <a href={net.explorerAddr(addr)} target="_blank" rel="noreferrer" className="sidebar-addr" style={{ color: net.color }}>
+                    {addr.slice(0, 10)}…{addr.slice(-6)} ↗
+                  </a>
+                </div>
+              ))}
+            </div>
+            {/* Chain Stats */}
+            <div className="sidebar-block">
+              <div className="sidebar-label">Live Chain Data</div>
+              <div className="sidebar-stats">
+                <div className="stat-box">
+                  <div className="stat-val" style={{ color: net.color }}>{data.endpoints.length}</div>
+                  <div className="stat-key">endpoints</div>
+                </div>
+                <div className="stat-box">
+                  <div className="stat-val" style={{ color: "#4ade80" }}>{data.totalCalls}</div>
+                  <div className="stat-key">total calls</div>
+                </div>
+                <div className="stat-box">
+                  <div className="stat-val">{data.paymasterDeposit}</div>
+                  <div className="stat-key">{net.currency} staked</div>
+                </div>
+                <div className="stat-box">
+                  <div className="stat-val">{data.totalSponsored}</div>
+                  <div className="stat-key">{net.currency} sponsored</div>
+                </div>
+              </div>
+            </div>
+            {/* How it works */}
+            <div className="sidebar-block">
+              <div className="sidebar-label">How it works</div>
+              <div className="sidebar-steps">
+                <div className="step-row"><span className="step-num" style={{ color: net.color }}>1</span> You provide a backend URL + API key</div>
+                <div className="step-row"><span className="step-num" style={{ color: net.color }}>2</span> AgentGate registers it on-chain with a price</div>
+                <div className="step-row"><span className="step-num" style={{ color: net.color }}>3</span> Agents discover your endpoint and pay HBAR per call</div>
+                <div className="step-row"><span className="step-num" style={{ color: net.color }}>4</span> AgentGate verifies payment, forwards request to your API</div>
+                <div className="step-row"><span className="step-num" style={{ color: net.color }}>5</span> Your API key stays server-side — agents never see it</div>
+              </div>
+            </div>
+            {/* Registered endpoints */}
+            {data.endpoints.length > 0 && (
+              <div className="sidebar-block">
+                <div className="sidebar-label">Registered Endpoints</div>
+                {data.endpoints.slice(0, 6).map((ep) => (
+                  <div key={ep.id} className="sidebar-row" style={{ alignItems: "flex-start" }}>
+                    <span className="sidebar-key" style={{ color: ep.active ? "#4ade80" : "#555" }}>#{ep.id}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 10, color: "#888", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ep.url}</div>
+                      <div style={{ fontSize: 9, color: "#444" }}>${ep.pricePerCall}/call · {ep.totalCalls} calls</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        </main>
       )}
 
       {view === "manage" && (
@@ -226,6 +294,93 @@ export default function App() {
         }
         .panel-narrow {
           max-width: 620px;
+        }
+        .publish-grid {
+          display: grid;
+          grid-template-columns: 1fr 340px;
+          gap: 16px;
+          align-items: start;
+        }
+        @media (max-width: 860px) { .publish-grid { grid-template-columns: 1fr; } }
+        .publish-sidebar {
+          display: flex;
+          flex-direction: column;
+          gap: 16px;
+          position: sticky;
+          top: 24px;
+        }
+        .sidebar-block {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+        }
+        .sidebar-label {
+          font-size: 9px;
+          color: #444;
+          text-transform: uppercase;
+          letter-spacing: 0.08em;
+          padding-bottom: 4px;
+          border-bottom: 1px solid #1a1a1a;
+        }
+        .sidebar-row {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+        .sidebar-key {
+          font-size: 10px;
+          color: #555;
+          min-width: 0;
+          flex-shrink: 0;
+        }
+        .sidebar-addr {
+          font-size: 10px;
+          font-family: 'JetBrains Mono', monospace;
+          text-decoration: none;
+          margin-left: auto;
+        }
+        .sidebar-addr:hover { text-decoration: underline; }
+        .sidebar-stats {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 8px;
+        }
+        .stat-box {
+          padding: 10px;
+          background: #080808;
+          border: 1px solid #1a1a1a;
+          border-radius: 6px;
+          text-align: center;
+        }
+        .stat-val {
+          font-size: 16px;
+          font-weight: 700;
+          color: #888;
+          font-family: 'JetBrains Mono', monospace;
+        }
+        .stat-key {
+          font-size: 9px;
+          color: #444;
+          margin-top: 2px;
+        }
+        .sidebar-steps {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+        }
+        .step-row {
+          display: flex;
+          align-items: flex-start;
+          gap: 8px;
+          font-size: 10px;
+          color: #666;
+          line-height: 1.4;
+        }
+        .step-num {
+          font-weight: 700;
+          font-size: 11px;
+          min-width: 14px;
+          font-family: 'JetBrains Mono', monospace;
         }
 
         .section-header {

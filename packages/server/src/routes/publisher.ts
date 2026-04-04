@@ -162,11 +162,12 @@ router.post("/proxy-config", async (c) => {
 
   // 4. Store proxy config
   proxyStore.set({
-    endpointId:    Number(endpointId),
+    endpointId:     Number(endpointId),
     backendUrl,
-    injectHeaders: injectHeaders || {},
-    publisherAddr: walletAddress.toLowerCase(),
-    registeredAt:  new Date(),
+    injectHeaders:  injectHeaders || {},
+    publisherAddr:  walletAddress.toLowerCase(),
+    requireWorldId: body.requireWorldId === true,
+    registeredAt:   new Date(),
   });
 
   console.log(`[proxy-config] ✅ Endpoint #${endpointId} → ${backendUrl} (by ${walletAddress})`);
@@ -241,13 +242,14 @@ router.get("/proxy-config/:endpointId", (c) => {
   if (!config) return c.json({ error: "No proxy config found" }, 404);
 
   return c.json({
-    endpointId:    config.endpointId,
-    backendUrl:    config.backendUrl,
-    headerCount:   Object.keys(config.injectHeaders).length,
-    headerKeys:    Object.keys(config.injectHeaders),   // keys shown, values hidden
-    publisherAddr: config.publisherAddr,
-    registeredAt:  config.registeredAt,
-    proxyUrl:      `/api/proxy/${config.endpointId}`,
+    endpointId:     config.endpointId,
+    backendUrl:     config.backendUrl,
+    headerCount:    Object.keys(config.injectHeaders).length,
+    headerKeys:     Object.keys(config.injectHeaders),   // keys shown, values hidden
+    publisherAddr:  config.publisherAddr,
+    requireWorldId: config.requireWorldId,
+    registeredAt:   config.registeredAt,
+    proxyUrl:       `/api/proxy/${config.endpointId}`,
   });
 });
 

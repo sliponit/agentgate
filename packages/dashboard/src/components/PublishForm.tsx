@@ -119,10 +119,11 @@ export function PublishForm({
 
   // Proxy Mode — always on (all endpoints go through AgentGate, guaranteeing x402 + WorldID)
   const proxyEnabled = true;
-  const [backendUrl,    setBackendUrl]    = useState("");
-  const [headerRows,    setHeaderRows]    = useState<{key: string; val: string}[]>([{ key: "", val: "" }]);
-  const [proxyDone,     setProxyDone]     = useState<string | null>(null); // proxyUrl
-  const [proxyError,    setProxyError]    = useState<string | null>(null);
+  const [backendUrl,      setBackendUrl]      = useState("");
+  const [headerRows,      setHeaderRows]      = useState<{key: string; val: string}[]>([{ key: "", val: "" }]);
+  const [requireWorldId,  setRequireWorldId]  = useState(false);
+  const [proxyDone,       setProxyDone]       = useState<string | null>(null); // proxyUrl
+  const [proxyError,      setProxyError]      = useState<string | null>(null);
 
   const [testing,       setTesting]       = useState(false);
   const [testResult,    setTestResult]    = useState<TestResult | null>(null);
@@ -383,7 +384,8 @@ export function PublishForm({
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
               endpointId, backendUrl: backendUrl.trim(),
-              injectHeaders, walletAddress: wallet.state.address,
+              injectHeaders, requireWorldId,
+              walletAddress: wallet.state.address,
               signature, timestamp,
             }),
           });
@@ -560,32 +562,56 @@ export function PublishForm({
             ))}
           </div>
 
-          {/* Auto-generated on-chain URL */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-            <span style={{ fontSize: 10, color: "#444", textTransform: "uppercase", letterSpacing: "0.08em" }}>
-              Your AgentGate URL <span style={{ color: "#333", textTransform: "none", letterSpacing: 0 }}>(auto-assigned, registered on-chain)</span>
-            </span>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <input ref={urlRef} type="url" value={url}
-                onChange={(e) => { setUrl(e.target.value); setTestResult(null); }}
-                placeholder={`${publicAgentGateBase()}/api/proxy/…`}
-                style={{ ...inputStyle, flex: 1, color: "#4ade80", fontSize: 11 }} />
-              <button
-                onClick={handleTest}
-                disabled={testing}
-                style={{
-                  padding: "9px 14px", fontFamily: "'JetBrains Mono', monospace", fontSize: 11,
-                  borderRadius: 6, cursor: testing ? "default" : "pointer",
-                  background: testing ? "#111" : `${net.color}22`,
-                  border: `1px solid ${testing ? "#333" : net.color}`,
-                  color: testing ? "#555" : net.color,
-                  whiteSpace: "nowrap", transition: "all 0.2s", flexShrink: 0,
-                }}
-              >
-                {testing ? "testing…" : "▶ test server"}
-              </button>
+          {/* WorldID toggle */}
+          <div style={{
+            display: "flex", alignItems: "center", gap: 10,
+            padding: "10px 12px", borderRadius: 6,
+            background: requireWorldId ? "#0a0f1a" : "#0a0a0a",
+            border: `1px solid ${requireWorldId ? "#1a2a4a" : "#1a1a1a"}`,
+            cursor: "pointer", transition: "all 0.2s",
+          }}
+            onClick={() => setRequireWorldId(v => !v)}
+          >
+            <div style={{
+              width: 32, height: 18, borderRadius: 9, padding: 2,
+              background: requireWorldId ? net.color : "#252525",
+              transition: "background 0.2s",
+              display: "flex", alignItems: "center",
+            }}>
+              <div style={{
+                width: 14, height: 14, borderRadius: 7,
+                background: "#fff",
+                transform: requireWorldId ? "translateX(14px)" : "translateX(0)",
+                transition: "transform 0.2s",
+              }} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: requireWorldId ? net.color : "#666" }}>
+                Require WorldID verification
+              </div>
+              <div style={{ fontSize: 10, color: requireWorldId ? `${net.color}88` : "#444", marginTop: 1 }}>
+                {requireWorldId
+                  ? "Only human-backed agents (WorldID verified) can access this endpoint"
+                  : "Any agent with HBAR can access — no identity proof needed"}
+              </div>
             </div>
           </div>
+
+          {/* Test server button */}
+          <button
+            onClick={handleTest}
+            disabled={testing}
+            style={{
+              padding: "9px 0", fontFamily: "'JetBrains Mono', monospace", fontSize: 11,
+              borderRadius: 6, cursor: testing ? "default" : "pointer",
+              background: testing ? "#111" : `${net.color}22`,
+              border: `1px solid ${testing ? "#333" : net.color}`,
+              color: testing ? "#555" : net.color,
+              transition: "all 0.2s", width: "100%",
+            }}
+          >
+            {testing ? "testing…" : "▶ test server connection"}
+          </button>
         </div>
 
       {/* ── Test Result ─────────────────────────────────────────────────────── */}
@@ -789,54 +815,105 @@ export function PublishForm({
 
         {publishResult && (
           <div style={{
-            padding: "14px 16px", borderRadius: 8,
+            padding: "16px 18px", borderRadius: 10,
             background: "#0a1a0a", border: "1px solid #1a3a1a",
-            display: "flex", flexDirection: "column", gap: 10,
+            display: "flex", flexDirection: "column", gap: 14,
           }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: "#4ade80" }}>
-              ✅ Endpoint registered on-chain
+            {/* Header */}
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontSize: 18 }}>✅</span>
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: "#4ade80" }}>Endpoint #{publishResult.endpointId} registered</span>
+                  {requireWorldId && (
+                    <span style={{
+                      fontSize: 9, padding: "2px 6px", borderRadius: 4,
+                      background: `${net.color}22`, border: `1px solid ${net.color}44`, color: net.color,
+                      fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em",
+                    }}>WorldID</span>
+                  )}
+                </div>
+                <div style={{ fontSize: 10, color: "#555" }}>{NETWORKS[publishResult.networkId].label} — chain {NETWORKS[publishResult.networkId].chainId}</div>
+              </div>
             </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+
+            {/* On-chain details grid */}
+            <div style={{
+              display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 16px",
+              padding: "12px 14px", borderRadius: 6, background: "#050a05", border: "1px solid #152015",
+            }}>
               {[
-                ["Network",   NETWORKS[publishResult.networkId].label],
-                ["URL",       url],
-                ["Price",     "$" + price + " USD (settled in HBAR)"],
-                ["Paymaster", paymasterAddress.slice(0, 14) + "…"],
-                ["Reg tx",    publishResult.txHash],
+                ["Endpoint ID", `#${publishResult.endpointId}`],
+                ["Price / call", `$${price} USD → HBAR`],
+                ["Registry", DEPLOYMENTS[selectedNet].publisherRegistry],
+                ["Paymaster", paymasterAddress],
               ].map(([k, v]) => (
-                <div key={k} style={{ display: "flex", gap: 8 }}>
-                  <span style={{ fontSize: 10, color: "#555", width: 70, flexShrink: 0 }}>{k}</span>
-                  <span style={{ fontSize: 10, color: "#888", wordBreak: "break-all" }}>{v}</span>
+                <div key={k} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                  <span style={{ fontSize: 9, color: "#444", textTransform: "uppercase", letterSpacing: "0.06em" }}>{k}</span>
+                  <span style={{ fontSize: 10, color: "#888", fontFamily: "'JetBrains Mono', monospace", wordBreak: "break-all" }}>{v}</span>
                 </div>
               ))}
             </div>
-            <a href={NETWORKS[publishResult.networkId].explorerTx(publishResult.txHash)}
-              target="_blank" rel="noreferrer"
-              style={{ fontSize: 11, color: net.color }}>
-              view registration on HashScan ↗
-            </a>
 
-            {/* Proxy result (shown after auto-activation) */}
-            {proxyEnabled && proxyDone && (
+            {/* Registration tx */}
+            <div style={{
+              display: "flex", flexDirection: "column", gap: 4,
+              padding: "10px 14px", borderRadius: 6, background: "#050a05", border: "1px solid #152015",
+            }}>
+              <span style={{ fontSize: 9, color: "#444", textTransform: "uppercase", letterSpacing: "0.06em" }}>Registration Transaction</span>
+              <code style={{ fontSize: 10, color: net.color, wordBreak: "break-all", fontFamily: "'JetBrains Mono', monospace" }}>
+                {publishResult.txHash}
+              </code>
+              <div style={{ display: "flex", gap: 10, marginTop: 2 }}>
+                <a href={NETWORKS[publishResult.networkId].explorerTx(publishResult.txHash)}
+                  target="_blank" rel="noreferrer"
+                  style={{ fontSize: 10, color: net.color }}>
+                  view on HashScan ↗
+                </a>
+                <a href={NETWORKS[publishResult.networkId].explorerAddr(DEPLOYMENTS[selectedNet].publisherRegistry)}
+                  target="_blank" rel="noreferrer"
+                  style={{ fontSize: 10, color: "#555" }}>
+                  registry contract ↗
+                </a>
+                <a href={NETWORKS[publishResult.networkId].explorerAddr(paymasterAddress)}
+                  target="_blank" rel="noreferrer"
+                  style={{ fontSize: 10, color: "#555" }}>
+                  paymaster contract ↗
+                </a>
+              </div>
+            </div>
+
+            {/* Proxy result */}
+            {proxyDone && (
               <div style={{
                 padding: "12px 14px", borderRadius: 6,
                 background: "#081a08", border: "1px solid #1a3a1a",
-                display: "flex", flexDirection: "column", gap: 6,
+                display: "flex", flexDirection: "column", gap: 8,
               }}>
                 <div style={{ fontSize: 12, fontWeight: 700, color: "#4ade80" }}>🔀 Proxy active</div>
-                <div style={{ fontSize: 11, color: "#666" }}>Agents pay HBAR to call:</div>
+                <div style={{ fontSize: 10, color: "#555" }}>Agents call this URL and pay HBAR per request:</div>
                 <code style={{
-                  fontSize: 11, color: net.color, wordBreak: "break-all",
-                  background: "#0a0a0a", padding: "6px 10px", borderRadius: 4,
+                  fontSize: 12, color: net.color, wordBreak: "break-all",
+                  background: "#0a0a0a", padding: "8px 12px", borderRadius: 5, display: "block",
+                  fontFamily: "'JetBrains Mono', monospace",
                 }}>
                   {(import.meta.env.VITE_SERVER_URL || "http://localhost:4021")}{proxyDone}
                 </code>
-                <div style={{ fontSize: 10, color: "#444" }}>
-                  Forwards to <strong style={{ color: "#666" }}>{backendUrl}</strong>. Your API key is never exposed.
+                <div style={{ fontSize: 10, color: "#444", lineHeight: 1.5 }}>
+                  Forwards to <strong style={{ color: "#666" }}>{backendUrl}</strong>. Your API key is injected server-side and never exposed to agents.
                 </div>
+                {/* Agent example */}
+                <div style={{ fontSize: 9, color: "#333", textTransform: "uppercase", letterSpacing: "0.06em", marginTop: 2 }}>Test it (agent curl)</div>
+                <code style={{
+                  fontSize: 9, color: "#555", wordBreak: "break-all",
+                  background: "#0a0a0a", padding: "6px 10px", borderRadius: 4,
+                  fontFamily: "'JetBrains Mono', monospace", lineHeight: 1.6,
+                }}>
+                  curl {(import.meta.env.VITE_SERVER_URL || "http://localhost:4021")}{proxyDone}
+                </code>
               </div>
             )}
-            {proxyEnabled && proxyError && !proxyDone && (
+            {proxyError && !proxyDone && (
               <div style={{
                 padding: "10px 12px", borderRadius: 6,
                 background: "#1a0a0a", border: "1px solid #3a1a1a",
@@ -846,46 +923,56 @@ export function PublishForm({
               </div>
             )}
 
-            {/* Deposit status */}
+            {/* Gas budget deposit status */}
             {hasDeposit && (
               <div style={{
-                marginTop: 4, padding: "10px 12px", borderRadius: 6,
+                padding: "12px 14px", borderRadius: 6,
                 background: depositDone ? "#081a08" : depositError ? "#1a0808" : "#0d0d0d",
                 border: `1px solid ${depositDone ? "#1a3a1a" : depositError ? "#3a1a1a" : "#1e1e1e"}`,
                 display: "flex", flexDirection: "column", gap: 6,
               }}>
                 {depositDone ? (
-                  <div style={{ fontSize: 12, fontWeight: 700, color: "#4ade80" }}>
-                    ✅ Gas budget deposited — {gasDeposit} {net.currency} ({gasSharePct}% share per call, ~{estCalls.toLocaleString()} sponsored calls)
-                  </div>
+                  <>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: "#4ade80" }}>
+                      ✅ Gas budget deposited
+                    </div>
+                    <div style={{
+                      display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8,
+                      padding: "8px 10px", borderRadius: 4, background: "#050a05",
+                    }}>
+                      <div style={{ textAlign: "center" }}>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: "#4ade80" }}>{gasDeposit}</div>
+                        <div style={{ fontSize: 9, color: "#444" }}>{net.currency} deposited</div>
+                      </div>
+                      <div style={{ textAlign: "center" }}>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: net.color }}>{gasSharePct}%</div>
+                        <div style={{ fontSize: 9, color: "#444" }}>gas share</div>
+                      </div>
+                      <div style={{ textAlign: "center" }}>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: "#888" }}>~{estCalls.toLocaleString()}</div>
+                        <div style={{ fontSize: 9, color: "#444" }}>sponsored calls</div>
+                      </div>
+                    </div>
+                  </>
                 ) : depositError ? (
                   <>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: "#f87171" }}>
-                      ❌ Deposit failed
-                    </div>
-                    <div style={{ fontSize: 11, color: "#f87171", wordBreak: "break-all" }}>
-                      {depositError}
-                    </div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: "#f87171" }}>❌ Deposit failed</div>
+                    <div style={{ fontSize: 11, color: "#f87171", wordBreak: "break-all" }}>{depositError}</div>
                     <div style={{ fontSize: 10, color: "#666", marginTop: 2 }}>
-                      Your endpoint is registered but has no gas budget yet. Make sure your wallet has enough {net.currency} (need {gasDeposit} {net.currency} + gas).
+                      Endpoint is registered but has no gas budget. Wallet needs {gasDeposit} {net.currency} + gas.
                     </div>
-                    <button
-                      onClick={handleRetryDeposit}
-                      disabled={publishing}
+                    <button onClick={handleRetryDeposit} disabled={publishing}
                       style={{
                         marginTop: 4, padding: "8px 0",
                         fontFamily: "'JetBrains Mono', monospace", fontSize: 11, fontWeight: 700,
                         borderRadius: 6, cursor: publishing ? "default" : "pointer",
                         border: `1px solid ${net.color}`, background: `${net.color}22`, color: net.color,
-                      }}
-                    >
+                      }}>
                       {publishing ? publishStep || "sending…" : `retry deposit ${gasDeposit} ${net.currency} →`}
                     </button>
                   </>
                 ) : (
-                  <div style={{ fontSize: 11, color: "#666" }}>
-                    ⏳ Depositing {gasDeposit} {net.currency} gas budget…
-                  </div>
+                  <div style={{ fontSize: 11, color: "#666" }}>⏳ Depositing {gasDeposit} {net.currency} gas budget…</div>
                 )}
               </div>
             )}

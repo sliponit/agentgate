@@ -17,6 +17,7 @@ import { defineChain } from "viem";
 import { proxyStore } from "../services/proxyStore";
 import { HederaFacilitatorClient } from "../services/hederaFacilitator";
 import { usdToTinybars } from "../services/hbarRate";
+import { validateAgentKitHeader } from "../services/agentkit";
 import { config } from "../config";
 
 const HEDERA_RPC  = process.env.HEDERA_TESTNET_RPC || "https://testnet.hashio.io/api";
@@ -97,7 +98,12 @@ router.all("/:endpointId/*", async (c) => {
       asset:   "hbar",
       extra:   { name: "HBAR", decimals: 8, assetTransferMethod: "hedera-native" },
     }];
-    const paymentRequired = { x402Version: 1, accepts };
+    const paymentRequired: any = { x402Version: 1, accepts };
+    // If WorldID is required, include agentkit info so agents know they need it
+    if (proxyConfig.requireWorldId) {
+      paymentRequired.requireWorldId = true;
+      paymentRequired.worldIdInfo = "This endpoint requires a valid WorldID AgentKit proof. Include an `agentkit` header with your SIWE-signed proof.";
+    }
     const encoded = Buffer.from(JSON.stringify(paymentRequired)).toString("base64");
     c.header("PAYMENT-REQUIRED", encoded);
     c.header("Content-Type", "application/json");
@@ -122,6 +128,28 @@ router.all("/:endpointId/*", async (c) => {
   }
 
   console.log(`[proxy] ✅ Payment verified for endpoint #${endpointId} ($${priceUsd} USD → ${amount} tinybars HBAR)`);
+
+  // 4b. WorldID check (if publisher requires it)
+  if (proxyConfig.requireWorldId) {
+    const agentkitHeader = c.req.header("agentkit") ?? c.req.header("AGENTKIT");
+    if (!agentkitHeader) {
+      return c.json({
+        error: "This endpoint requires WorldID verification. Include a valid `agentkit` header with your SIWE-signed proof.",
+        requireWorldId: true,
+      }, 403);
+    }
+    const akResult = await validateAgentKitHeader(agentkitHeader, c.req.url);
+    if (!akResult.valid) {
+      return c.json({ error: `WorldID verification failed: ${akResult.error}`, requireWorldId: true }, 403);
+    }
+    if (!akResult.humanId) {
+      return c.json({
+        error: `Agent ${akResult.address} is not registered in the World Chain AgentBook. Register at worldcoin.org.`,
+        requireWorldId: true,
+      }, 403);
+    }
+    console.log(`[proxy] ✅ WorldID verified: ${akResult.address} (humanId: ${akResult.humanId.slice(0, 10)}…)`);
+  }
 
   // 5. Forward to upstream backend
   const method      = c.req.method;
