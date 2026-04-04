@@ -57,7 +57,7 @@ function getClient(networkId: NetworkId) {
   return createPublicClient({ chain, transport: http(cfg.rpc) });
 }
 
-export function useOnChainData(networkId: NetworkId, pollMs = 30000) {
+export function useOnChainData(networkId: NetworkId) {
   const [data, setData] = useState<OnChainData>(INITIAL);
 
   const fetch = useCallback(async () => {
@@ -164,9 +164,7 @@ export function useOnChainData(networkId: NetworkId, pollMs = 30000) {
   useEffect(() => {
     setData({ ...INITIAL, loading: true });
     fetch();
-    const id = setInterval(fetch, pollMs);
-    return () => clearInterval(id);
-  }, [fetch, pollMs]);
+  }, [fetch]);
 
   return { data, refetch: fetch };
 }

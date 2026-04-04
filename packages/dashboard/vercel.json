@@ -1,0 +1,6 @@
+{
+  "rewrites": [
+    { "source": "/api/hedera-rpc", "destination": "/api/hedera-rpc" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}

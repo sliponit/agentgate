@@ -1,10 +1,13 @@
 import { defineChain } from "viem";
 
+// On Vercel, use our proxy to avoid CORS issues with Hashio
+const HEDERA_RPC = import.meta.env.PROD ? "/api/hedera-rpc" : "https://testnet.hashio.io/api";
+
 export const hederaTestnet = defineChain({
   id: 296,
   name: "Hedera Testnet",
   nativeCurrency: { name: "HBAR", symbol: "HBAR", decimals: 18 },
-  rpcUrls: { default: { http: ["https://testnet.hashio.io/api"] } },
+  rpcUrls: { default: { http: [HEDERA_RPC] } },
   blockExplorers: {
     default: { name: "HashScan", url: "https://hashscan.io/testnet" },
   },
@@ -27,7 +30,7 @@ export const NETWORKS = {
     id: "hedera" as const,
     label: "Hedera Testnet",
     chainId: 296,
-    rpc: "https://testnet.hashio.io/api",
+    rpc: HEDERA_RPC,
     currency: "HBAR",
     explorerBase: "https://hashscan.io/testnet",
     explorerTx: (h: string) => `https://hashscan.io/testnet/tx/${h}`,

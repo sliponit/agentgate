@@ -216,7 +216,7 @@ export default function App() {
       {/* ── Footer ───────────────────────────────────────────────────────── */}
       <footer className="footer">
         <span>AgentGate · AI Agent Payments on Hedera</span>
-        <span>polls every 12s · {net.label} · chainId {net.chainId}</span>
+        <span>{net.label} · chainId {net.chainId}</span>
       </footer>
 
       <style>{`
