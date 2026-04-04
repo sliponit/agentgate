@@ -163,6 +163,7 @@ router.post("/proxy-config", async (c) => {
   // 4. Store proxy config
   proxyStore.set({
     endpointId:     Number(endpointId),
+    name:           (body.name || "").trim() || `Endpoint #${endpointId}`,
     backendUrl,
     injectHeaders:  injectHeaders || {},
     publisherAddr:  walletAddress.toLowerCase(),
@@ -243,6 +244,7 @@ router.get("/proxy-config/:endpointId", (c) => {
 
   return c.json({
     endpointId:     config.endpointId,
+    name:           config.name,
     backendUrl:     config.backendUrl,
     headerCount:    Object.keys(config.injectHeaders).length,
     headerKeys:     Object.keys(config.injectHeaders),   // keys shown, values hidden

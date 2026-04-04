@@ -183,7 +183,7 @@ router.all("/:endpointId/*", async (c) => {
       asset:   "hbar",
       extra:   { name: "HBAR", decimals: 8, assetTransferMethod: "hedera-native" },
     }];
-    const paymentRequired: any = { x402Version: 1, accepts };
+    const paymentRequired: any = { x402Version: 1, accepts, endpointName: proxyConfig.name };
     if (proxyConfig.requireWorldId) {
       paymentRequired.requireWorldId = true;
       paymentRequired.freeTrialInfo = "WorldID-verified agents get 3 free calls. Include `agentkit` header for free-trial.";

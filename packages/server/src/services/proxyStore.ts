@@ -10,6 +10,7 @@
 
 export interface ProxyConfig {
   endpointId:      number;
+  name:            string;                   // human-readable name (e.g. "GPT-4o Chat")
   backendUrl:      string;
   injectHeaders:   Record<string, string>;  // e.g. {"x-api-key": "sk-ant-..."}
   publisherAddr:   string;                  // lowercase

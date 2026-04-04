@@ -108,6 +108,7 @@ export function PublishForm({
   const wallet = useWallet();
 
   const [url,           setUrl]           = useState("");
+  const [endpointName,  setEndpointName]  = useState("");
   const [price,         setPrice]         = useState("0.01");
   const [gasSharePct,   setGasSharePct]   = useState(100);    // 0–100%
   const [gasDeposit,    setGasDeposit]    = useState("0.005"); // ETH to deposit
@@ -383,7 +384,8 @@ export function PublishForm({
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
-              endpointId, backendUrl: backendUrl.trim(),
+              endpointId, name: endpointName.trim() || undefined,
+              backendUrl: backendUrl.trim(),
               injectHeaders, requireWorldId,
               walletAddress: wallet.state.address,
               signature, timestamp,
@@ -511,6 +513,19 @@ export function PublishForm({
       {/* ── Backend URL + headers ───────────────────────────────────────────── */}
       <div style={{ display: "flex", flexDirection: "column", gap: 12,
         padding: "14px 16px", borderRadius: 8, background: "#080808", border: "1px solid #1e1e1e" }}>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+            <span style={{ fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+              Endpoint Name <span style={{ color: "#444", textTransform: "none", letterSpacing: 0 }}>(optional — shown to agents)</span>
+            </span>
+            <input
+              type="text"
+              placeholder="e.g. GPT-4o Chat, Claude API, Weather Service…"
+              value={endpointName}
+              onChange={(e) => setEndpointName(e.target.value)}
+              style={inputStyle}
+            />
+          </div>
 
           <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
             <span style={{ fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: "0.08em" }}>
@@ -823,8 +838,11 @@ export function PublishForm({
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <span style={{ fontSize: 18 }}>✅</span>
               <div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ fontSize: 14, fontWeight: 700, color: "#4ade80" }}>Endpoint #{publishResult.endpointId} registered</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: "#4ade80" }}>
+                    {endpointName.trim() || `Endpoint #${publishResult.endpointId}`}
+                  </span>
+                  <span style={{ fontSize: 10, color: "#555" }}>#{publishResult.endpointId}</span>
                   {requireWorldId && (
                     <span style={{
                       fontSize: 9, padding: "2px 6px", borderRadius: 4,
