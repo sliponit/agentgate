@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { createPublicClient, http, keccak256, toHex, toBytes } from "viem";
+import { createPublicClient, http, keccak256, toHex, toBytes, recoverMessageAddress } from "viem";
 import { hederaTestnet, NetworkId, NETWORKS, DEPLOYMENTS } from "../lib/chains";
 import { REGISTRY_ABI } from "../lib/abi";
 import { useWallet } from "../hooks/useWallet";
@@ -133,6 +133,22 @@ export function ManageEndpoint({ networkId }: { networkId: NetworkId }) {
   const [saveError,   setSaveError]   = useState<string | null>(null);
   const [saveDone,    setSaveDone]    = useState<string | null>(null); // tx hash
 
+  // Endpoint ID from registry (for proxy config)
+  const [selectedEndpointId, setSelectedEndpointId] = useState<number | null>(null);
+
+  // Proxy config
+  const [proxyEnabled,    setProxyEnabled]    = useState(false);
+  const [backendUrl,      setBackendUrl]      = useState("");
+  const [headerRows,      setHeaderRows]      = useState<{ key: string; value: string }[]>([{ key: "", value: "" }]);
+  const [proxySaving,     setProxySaving]     = useState(false);
+  const [proxyDone,       setProxyDone]       = useState(false);
+  const [proxyError,      setProxyError]      = useState<string | null>(null);
+
+  // Active proxy state (fetched on lookup)
+  const [activeProxy,     setActiveProxy]     = useState<{ backendUrl: string; headerKeys: string[]; proxyUrl: string } | null>(null);
+  const [deactivating,    setDeactivating]    = useState(false);
+  const [deactivateError, setDeactivateError] = useState<string | null>(null);
+
   const selectedNetData = NETWORKS[selectedNet];
   const paymasterAddr   = DEPLOYMENTS[selectedNet].paymaster;
 
@@ -222,11 +238,18 @@ export function ManageEndpoint({ networkId }: { networkId: NetworkId }) {
     setInfo(null);
     setSaveDone(null);
     setSaveError(null);
+    setSelectedEndpointId(null);
+    setProxyEnabled(false);
+    setProxyDone(false);
+    setProxyError(null);
+    setActiveProxy(null);
+    setDeactivateError(null);
 
     try {
       const chain        = selectedNet === "hedera" ? hederaTestnet : baseSepolia;
       const publicClient = createPublicClient({ chain, transport: http(NETWORKS[selectedNet].rpc) });
       const hash         = endpointHash(trimmed);
+      const d            = DEPLOYMENTS[selectedNet];
 
       const [balance, bps, owner] = await Promise.all([
         publicClient.readContract({ address: paymasterAddr, abi: PAYMASTER_READ_ABI, functionName: "endpointBalance", args: [hash] }),
@@ -236,10 +259,124 @@ export function ManageEndpoint({ networkId }: { networkId: NetworkId }) {
 
       setInfo({ balance: balance as bigint, bps: Number(bps), owner: owner as `0x${string}` });
       setNewBps(Number(bps));
+
+      // Find endpointId from registry by scanning
+      try {
+        const nextId = await publicClient.readContract({
+          address: d.publisherRegistry,
+          abi: REGISTRY_ABI,
+          functionName: "nextEndpointId",
+          args: [],
+        }) as bigint;
+        const total = Number(nextId);
+        const ids   = Array.from({ length: Math.min(total, 200) }, (_, i) => BigInt(i));
+        const eps   = await Promise.all(ids.map((id) =>
+          publicClient.readContract({
+            address: d.publisherRegistry,
+            abi: REGISTRY_ABI,
+            functionName: "endpoints",
+            args: [id],
+          }).catch(() => null)
+        ));
+        const match = eps.find((ep) => ep && (ep as any)[2] === trimmed);
+        if (match) {
+          const eid = Number((match as any)[0]);
+          setSelectedEndpointId(eid);
+          // Check if proxy is already active
+          try {
+            const SERVER = (import.meta as any).env?.VITE_SERVER_URL || "http://localhost:4021";
+            const pr = await fetch(`${SERVER}/api/publisher/proxy-config/${eid}`);
+            if (pr.ok) {
+              const pd = await pr.json() as any;
+              setActiveProxy({ backendUrl: pd.backendUrl, headerKeys: pd.headerKeys ?? [], proxyUrl: pd.proxyUrl });
+            }
+          } catch { /* proxy check optional */ }
+        }
+      } catch { /* endpoint ID optional */ }
     } catch (e: any) {
       setLookError(e.shortMessage || e.message || String(e));
     } finally {
       setLooking(false);
+    }
+  }
+
+  // ── Proxy config ─────────────────────────────────────────────────────────────
+
+  async function handleProxyConfig() {
+    if (!wallet.state.connected || selectedEndpointId === null) return;
+    const addr = wallet.state.address!;
+    setProxySaving(true);
+    setProxyError(null);
+    setProxyDone(false);
+    try {
+      const timestamp = Date.now();
+      const injectHeaders = Object.fromEntries(
+        headerRows.filter((r) => r.key.trim()).map((r) => [r.key.trim(), r.value.trim()])
+      );
+      const message = `AgentGate proxy config\nendpointId:${selectedEndpointId}\nbackendUrl:${backendUrl}\ntimestamp:${timestamp}`;
+      const signature = await (window as any).ethereum.request({
+        method: "personal_sign",
+        params: [message, addr],
+      });
+
+      // Verify locally before sending
+      const recovered = await recoverMessageAddress({ message, signature });
+      if (recovered.toLowerCase() !== addr.toLowerCase()) throw new Error("Signature mismatch");
+
+      const res = await fetch("/api/publisher/proxy-config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          endpointId: selectedEndpointId,
+          backendUrl,
+          injectHeaders,
+          walletAddress: addr,
+          signature,
+          timestamp,
+        }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error((j as any).error || `HTTP ${res.status}`);
+      }
+      setProxyDone(true);
+    } catch (e: any) {
+      setProxyError(e.message || String(e));
+    } finally {
+      setProxySaving(false);
+    }
+  }
+
+  // ── Deactivate proxy ─────────────────────────────────────────────────────
+
+  async function handleDeactivateProxy() {
+    if (!wallet.state.connected || selectedEndpointId === null) return;
+    const addr = wallet.state.address!;
+    setDeactivating(true);
+    setDeactivateError(null);
+    try {
+      const timestamp = Date.now();
+      const message   = `AgentGate deactivate proxy\nendpointId: ${selectedEndpointId}\ntimestamp: ${timestamp}`;
+      const signature = await (window as any).ethereum.request({
+        method: "personal_sign",
+        params: [message, addr],
+      });
+      const SERVER = (import.meta as any).env?.VITE_SERVER_URL || "http://localhost:4021";
+      const res = await fetch(`${SERVER}/api/publisher/proxy-config/${selectedEndpointId}`, {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ walletAddress: addr, signature, timestamp }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error((j as any).error || `HTTP ${res.status}`);
+      }
+      setActiveProxy(null);
+      setProxyDone(false);
+    } catch (e: any) {
+      setDeactivateError(e.message || String(e));
+    } finally {
+      setDeactivating(false);
     }
   }
 
@@ -408,7 +545,7 @@ export function ManageEndpoint({ networkId }: { networkId: NetworkId }) {
                       {ep.url}
                     </span>
                     <button
-                      onClick={() => { setUrl(ep.url); setTimeout(() => handleLookup(), 50); }}
+                      onClick={() => { setUrl(ep.url); setSelectedEndpointId(ep.id); setTimeout(() => handleLookup(), 50); }}
                       style={{
                         flexShrink: 0, padding: "3px 10px",
                         fontFamily: "'JetBrains Mono', monospace", fontSize: 10,
@@ -695,6 +832,188 @@ export function ManageEndpoint({ networkId }: { networkId: NetworkId }) {
               fontSize: 11, color: "#f87171", wordBreak: "break-all",
             }}>
               ❌ {saveError}
+            </div>
+          )}
+
+          {/* ── Proxy Config ─────────────────────────────────────────────── */}
+          {isOwner && selectedEndpointId !== null && (
+            <div style={{
+              borderTop: "1px solid #1a1a1a", paddingTop: 16, marginTop: 4,
+              display: "flex", flexDirection: "column", gap: 10,
+            }}>
+              <button
+                onClick={() => { setProxyEnabled((v) => !v); setProxyDone(false); setProxyError(null); }}
+                style={{
+                  padding: "8px 14px", borderRadius: 6, cursor: "pointer",
+                  fontFamily: "'JetBrains Mono', monospace", fontSize: 11, fontWeight: 600,
+                  border: `1px solid ${proxyEnabled ? selectedNetData.color : "#252525"}`,
+                  background: proxyEnabled ? `${selectedNetData.color}18` : "#0a0a0a",
+                  color: proxyEnabled ? selectedNetData.color : "#555",
+                  transition: "all 0.2s",
+                }}
+              >
+                {proxyEnabled ? "▲ hide proxy setup" : "🔀 configure as proxy → forward to any API"}
+              </button>
+
+              {proxyEnabled && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  {/* Active proxy status */}
+                  {activeProxy && (
+                    <div style={{
+                      padding: "10px 14px", borderRadius: 6,
+                      background: "#081a08", border: "1px solid #1a3a1a",
+                      display: "flex", flexDirection: "column", gap: 6,
+                    }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: "#4ade80" }}>🔀 Proxy currently active</div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 10, color: "#555" }}>→</span>
+                        <span style={{ fontSize: 10, color: "#888", wordBreak: "break-all" }}>{activeProxy.backendUrl}</span>
+                      </div>
+                      {activeProxy.headerKeys.length > 0 && (
+                        <div style={{ fontSize: 10, color: "#555" }}>
+                          injecting: {activeProxy.headerKeys.join(", ")}
+                        </div>
+                      )}
+                      <code style={{ fontSize: 10, color: selectedNetData.color, background: "#0d1a0d", padding: "3px 7px", borderRadius: 4, wordBreak: "break-all" }}>
+                        {(import.meta as any).env?.VITE_SERVER_URL || "http://localhost:4021"}{activeProxy.proxyUrl}
+                      </code>
+                      <button
+                        disabled={deactivating}
+                        onClick={handleDeactivateProxy}
+                        style={{
+                          marginTop: 4, padding: "7px 14px", borderRadius: 5, cursor: deactivating ? "not-allowed" : "pointer",
+                          fontFamily: "'JetBrains Mono', monospace", fontSize: 11, fontWeight: 600,
+                          background: "#1a0a0a", border: "1px solid #3a1a1a", color: deactivating ? "#555" : "#f87171",
+                          transition: "all 0.2s", alignSelf: "flex-start",
+                        }}
+                      >
+                        {deactivating ? "signing…" : "🗑 deactivate proxy"}
+                      </button>
+                      {deactivateError && (
+                        <div style={{ fontSize: 10, color: "#f87171" }}>❌ {deactivateError}</div>
+                      )}
+                    </div>
+                  )}
+
+                  {!activeProxy && (
+                  <div style={{ fontSize: 11, color: "#666" }}>
+                    Proxy mode forwards incoming paid requests to your backend URL, injecting your private auth headers.
+                    Agents call <code style={{ color: selectedNetData.color }}>/api/proxy/{selectedEndpointId}</code>.
+                  </div>)}
+
+                  {/* Config form — only shown when proxy is not yet active */}
+                  {!activeProxy && (<>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    <label style={{ fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                      Backend URL
+                    </label>
+                    <input
+                      value={backendUrl}
+                      onChange={(e) => setBackendUrl(e.target.value)}
+                      placeholder="https://api.anthropic.com/v1/messages"
+                      style={{
+                        background: "#111", border: "1px solid #252525", borderRadius: 5,
+                        padding: "8px 10px", color: "#ccc", fontFamily: "'JetBrains Mono', monospace",
+                        fontSize: 11, outline: "none", width: "100%", boxSizing: "border-box",
+                      }}
+                    />
+                  </div>
+
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    <label style={{ fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                      Auth headers (private — stored server-side only)
+                    </label>
+                    {headerRows.map((row, i) => (
+                      <div key={i} style={{ display: "flex", gap: 6 }}>
+                        <input
+                          value={row.key}
+                          onChange={(e) => {
+                            const r = [...headerRows]; r[i] = { ...r[i], key: e.target.value }; setHeaderRows(r);
+                          }}
+                          placeholder="x-api-key"
+                          style={{
+                            flex: 1, background: "#111", border: "1px solid #252525", borderRadius: 5,
+                            padding: "6px 8px", color: "#ccc", fontFamily: "'JetBrains Mono', monospace",
+                            fontSize: 11, outline: "none",
+                          }}
+                        />
+                        <input
+                          value={row.value}
+                          onChange={(e) => {
+                            const r = [...headerRows]; r[i] = { ...r[i], value: e.target.value }; setHeaderRows(r);
+                          }}
+                          placeholder="sk-••••"
+                          style={{
+                            flex: 2, background: "#111", border: "1px solid #252525", borderRadius: 5,
+                            padding: "6px 8px", color: "#ccc", fontFamily: "'JetBrains Mono', monospace",
+                            fontSize: 11, outline: "none",
+                          }}
+                        />
+                        {headerRows.length > 1 && (
+                          <button
+                            onClick={() => setHeaderRows(headerRows.filter((_, j) => j !== i))}
+                            style={{
+                              background: "none", border: "1px solid #2a2a2a", borderRadius: 4,
+                              color: "#555", cursor: "pointer", padding: "0 8px", fontSize: 12,
+                            }}
+                          >×</button>
+                        )}
+                      </div>
+                    ))}
+                    <button
+                      onClick={() => setHeaderRows([...headerRows, { key: "", value: "" }])}
+                      style={{
+                        alignSelf: "flex-start", background: "none", border: "1px solid #2a2a2a",
+                        borderRadius: 4, color: "#555", cursor: "pointer", padding: "4px 10px", fontSize: 11,
+                      }}
+                    >+ add header</button>
+                  </div>
+
+                  <button
+                    disabled={proxySaving || !backendUrl.trim()}
+                    onClick={handleProxyConfig}
+                    style={{
+                      padding: "9px 16px", borderRadius: 6, cursor: proxySaving || !backendUrl.trim() ? "not-allowed" : "pointer",
+                      fontFamily: "'JetBrains Mono', monospace", fontSize: 11, fontWeight: 700,
+                      background: proxySaving || !backendUrl.trim() ? "#111" : selectedNetData.color,
+                      color: proxySaving || !backendUrl.trim() ? "#444" : "#000",
+                      border: "none", transition: "all 0.2s",
+                    }}
+                  >
+                    {proxySaving ? "signing + saving…" : "🔏 sign + activate proxy"}
+                  </button>
+                  </>)}
+
+                  {proxyDone && (
+                    <div style={{
+                      padding: "10px 14px", borderRadius: 6,
+                      background: "#081a08", border: "1px solid #1a3a1a",
+                      display: "flex", flexDirection: "column", gap: 4,
+                    }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: "#4ade80" }}>✅ Proxy activated</div>
+                      <div style={{ fontSize: 11, color: "#888" }}>
+                        Agents can now call:
+                      </div>
+                      <code style={{
+                        fontSize: 10, color: selectedNetData.color, background: "#0d1a0d",
+                        padding: "4px 8px", borderRadius: 4, wordBreak: "break-all",
+                      }}>
+                        {window.location.origin}/api/proxy/{selectedEndpointId}
+                      </code>
+                    </div>
+                  )}
+
+                  {proxyError && (
+                    <div style={{
+                      padding: "8px 12px", borderRadius: 6,
+                      background: "#1a0a0a", border: "1px solid #3a1a1a",
+                      fontSize: 11, color: "#f87171", wordBreak: "break-all",
+                    }}>
+                      ❌ {proxyError}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>

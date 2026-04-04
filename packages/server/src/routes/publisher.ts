@@ -179,6 +179,59 @@ router.post("/proxy-config", async (c) => {
 });
 
 /**
+ * DELETE /api/publisher/proxy-config/:endpointId
+ * Deactivates a proxy. Same EIP-191 ownership check as POST.
+ * Body: { walletAddress, signature, timestamp }
+ * Message signed: `AgentGate deactivate proxy\nendpointId: <id>\ntimestamp: <ts>`
+ */
+router.delete("/proxy-config/:endpointId", async (c) => {
+  const id = parseInt(c.req.param("endpointId"));
+  if (isNaN(id)) return c.json({ error: "Invalid endpointId" }, 400);
+
+  let body: any;
+  try { body = await c.req.json(); } catch { return c.json({ error: "Invalid JSON body" }, 400); }
+
+  const { walletAddress, signature, timestamp } = body;
+  if (!walletAddress || !signature || !timestamp) {
+    return c.json({ error: "Missing required fields: walletAddress, signature, timestamp" }, 400);
+  }
+
+  if (Math.abs(Date.now() - Number(timestamp)) > 10 * 60 * 1000) {
+    return c.json({ error: "Signature timestamp expired (must be within 10 minutes)" }, 400);
+  }
+
+  const message = `AgentGate deactivate proxy\nendpointId: ${id}\ntimestamp: ${timestamp}`;
+  let recovered: string;
+  try {
+    recovered = await recoverMessageAddress({ message, signature });
+  } catch (err: any) {
+    return c.json({ error: `Invalid signature: ${err.message}` }, 400);
+  }
+
+  if (recovered.toLowerCase() !== walletAddress.toLowerCase()) {
+    return c.json({ error: "Signature mismatch" }, 403);
+  }
+
+  // Verify on-chain ownership
+  try {
+    const client = createPublicClient({ chain: hederaChain, transport: http(HEDERA_RPC) });
+    const ep = await client.readContract({
+      address: REGISTRY, abi: REGISTRY_ABI,
+      functionName: "endpoints", args: [BigInt(id)],
+    }) as readonly [bigint, `0x${string}`, ...unknown[]];
+    if (ep[1].toLowerCase() !== walletAddress.toLowerCase()) {
+      return c.json({ error: `Unauthorized: not the endpoint owner` }, 403);
+    }
+  } catch (err: any) {
+    return c.json({ error: `Could not verify ownership: ${err.message}` }, 500);
+  }
+
+  proxyStore.delete(id);
+  console.log(`[proxy-config] 🗑  Endpoint #${id} proxy deactivated by ${walletAddress}`);
+  return c.json({ success: true, message: `Proxy for endpoint #${id} deactivated.` });
+});
+
+/**
  * GET /api/publisher/proxy-config/:endpointId
  * Returns proxy info (without secret headers) for a given endpoint.
  */

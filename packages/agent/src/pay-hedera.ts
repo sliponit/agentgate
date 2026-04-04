@@ -155,6 +155,7 @@ async function main() {
     uri:       endpoint,
     version:   "1",
     chainId:   "eip155:296",  // chain where agent is operating
+    type:      "eip191" as const,
     nonce,
     issuedAt,
     statement: "Verify your agent is backed by a real human",

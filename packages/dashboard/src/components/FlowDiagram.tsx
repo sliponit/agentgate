@@ -33,195 +33,214 @@ function buildSteps(
   networkId: NetworkId,
   ev: GasSponsoredEvent | null
 ): Step[] {
-  const dep  = DEPLOYMENTS[networkId];
-  const net  = NETWORKS[networkId];
-  const pm   = fmt(dep.paymaster);
-  const reg  = fmt(dep.publisherRegistry);
+  const dep    = DEPLOYMENTS[networkId];
+  const net    = NETWORKS[networkId];
   const isLive = ev !== null;
 
-  // Real values when available, demo placeholders otherwise
-  const agentAddr     = isLive ? fmt(ev!.agent)        : fmt(dep.deployer) + " (demo)";
-  const txHashShort   = isLive ? fmt(ev!.txHash)       : "—";
-  const endpointHash  = isLive ? fmt(ev!.endpointHash) : "keccak256('https://…/weather')";
-  const gasUsed       = isLive ? ev!.gasUsed.toLocaleString()         : "~180,000";
-  const gasCostEth    = isLive
-    ? (Number(ev!.gasUsed) / 1e18).toFixed(8) + " " + net.currency
-    : "~0.000054 " + net.currency;
-  const bpsPct        = isLive ? Math.round(ev!.sponsorshipBps / 100) : 100;
-  const remainingBudget = isLive ? "—" : "0.0097 " + net.currency;
+  const agentAddr  = isLive ? fmt(ev!.agent)   : "0x05a7Ae…69b0";
+  const serverAddr = fmt(dep.deployer);
+  const reg        = fmt(dep.publisherRegistry);
+  const txHash     = isLive ? fmt(ev!.txHash)  : "0xb1747a…de5f";
+  const txId       = isLive ? fmt(ev!.txHash)  : "0.0.578921@1743811432.000";
+  const tinybars   = isLive ? ev!.gasUsed.toLocaleString() : "107";
+  const hbarAmt    = isLive ? (Number(ev!.gasUsed) / 1e8).toFixed(7) : "0.0000107";
 
   return [
+    // ── 1. Initial request (no payment) ──────────────────────────────────────
     {
       id: 0,
       from: "AI Agent", fromIcon: "🤖",
-      to: "Bundler",    toIcon: "📦",
-      label: "UserOperation submitted",
-      hasLiveData: isLive,
+      to: "AgentGate Server", toIcon: "🌐",
+      label: "GET /api/weather/milan",
+      hasLiveData: false,
       request: {
-        title: "→ UserOperation",
+        title: "→ HTTP GET (no payment yet)",
         fields: [
-          { key: "sender",           value: agentAddr,   highlight: true, live: isLive },
-          { key: "callData",         value: "0x…(execute)", highlight: true },
-          { key: "paymasterAndData", value: pm + " + endpointHash", highlight: true },
-          { key: "maxFeePerGas",     value: net.chainId === 296 ? "1200 Gwei" : "≈0.006 Gwei" },
+          { key: "method",  value: "GET",                  highlight: true },
+          { key: "path",    value: "/api/weather/milan",   highlight: true },
+          { key: "headers", value: "(none)" },
+          { key: "agent",   value: agentAddr,              live: isLive },
         ],
       },
       response: {
-        title: "← Bundler ack",
+        title: "← 402 Payment Required",
         fields: [
-          { key: "userOpHash", value: isLive ? fmt(ev!.endpointHash) : "pending", live: isLive },
-          { key: "status",     value: "queued ✓" },
-          { key: "eta",        value: isLive ? "confirmed" : "~2s" },
+          { key: "status",    value: "402 Payment Required", highlight: true },
+          { key: "payTo",     value: serverAddr },
+          { key: "amount",    value: `${tinybars} tinybars (~$0.01)`, highlight: true },
+          { key: "paymentId", value: `x402-${txId.slice(0, 14)}` },
+          { key: "network",   value: "eip155:296 (Hedera Testnet)" },
         ],
       },
-      note: "Agent submits a UserOp with paymasterData = endpoint hash. Zero native token needed.",
+      note: "x402 protocol: server responds with 402 and payment terms — recipient address, amount in tinybars, and a unique paymentId.",
     },
+
+    // ── 2. Agent sends HBAR ──────────────────────────────────────────────────
     {
       id: 1,
-      from: "Bundler",        fromIcon: "📦",
-      to: "EntryPoint v0.7", toIcon: "⚡",
-      label: "handleOps() on-chain",
+      from: "AI Agent", fromIcon: "🤖",
+      to: "Hedera Network", toIcon: "🌿",
+      label: "CryptoTransfer — pay HBAR",
+      hasLiveData: isLive,
       request: {
-        title: "→ handleOps(ops, beneficiary)",
+        title: "→ sendTransaction() on Hedera",
         fields: [
-          { key: "ops.length",  value: "1" },
-          { key: "beneficiary", value: fmt(dep.deployer) },
-          { key: "txHash",      value: isLive ? fmt(ev!.txHash) : "(pending)", live: isLive },
+          { key: "to",       value: serverAddr,            highlight: true },
+          { key: "value",    value: `${tinybars} tinybars (${hbarAmt} HBAR)`, highlight: true, live: isLive },
+          { key: "chain",    value: "Hedera Testnet (296)" },
+          { key: "gasPrice", value: "1200 Gwei" },
         ],
       },
       response: {
-        title: "← EntryPoint routes",
+        title: "← consensus reached",
         fields: [
-          { key: "calls",   value: "validatePaymasterUserOp()" },
-          { key: "then",    value: "executeUserOp()" },
-          { key: "finally", value: "_postOp()" },
+          { key: "txHash",    value: txHash,   highlight: true, live: isLive },
+          { key: "txId",      value: txId,                      live: isLive },
+          { key: "status",    value: "SUCCESS ✓",               highlight: true },
+          { key: "finality",  value: isLive ? "confirmed" : "~3s" },
         ],
       },
-      note: "Bundler packs the op into a tx and calls EntryPoint.handleOps.",
+      note: "Agent signs and broadcasts a native HBAR transfer using viem. Hedera reaches finality in ~3 seconds.",
     },
+
+    // ── 3. Retry with payment proof ──────────────────────────────────────────
     {
       id: 2,
-      from: "EntryPoint v0.7",   fromIcon: "⚡",
-      to: "AgentGate Paymaster", toIcon: "🛡️",
-      label: "validatePaymasterUserOp()",
+      from: "AI Agent", fromIcon: "🤖",
+      to: "AgentGate Server", toIcon: "🌐",
+      label: "Retry + PAYMENT-SIGNATURE header",
       hasLiveData: isLive,
       request: {
-        title: "→ validatePaymasterUserOp",
+        title: "→ GET /api/weather/milan (retry)",
         fields: [
-          { key: "endpointHash", value: endpointHash,  highlight: true, live: isLive },
-          { key: "maxCost",      value: "≈" + gasCostEth, highlight: true },
-          { key: "sender",       value: agentAddr, live: isLive },
+          { key: "method",            value: "GET" },
+          { key: "path",              value: "/api/weather/milan" },
+          { key: "PAYMENT-SIGNATURE", value: `${txId}:${tinybars}:timestamp`, highlight: true, live: isLive },
+          { key: "agentkit",          value: "base64(SIWE WorldID proof)" },
         ],
       },
       response: {
-        title: "← Validation data",
+        title: "← server verifying…",
         fields: [
-          { key: "validationData",  value: "0 (valid ✓)", highlight: true },
-          { key: "sponsorshipBps",  value: `${bpsPct}% (${bpsPct * 100} bps)`, highlight: true, live: isLive },
-          { key: "dailyRemaining",  value: remainingBudget },
+          { key: "step 1", value: "parse tx ID from PAYMENT-SIGNATURE" },
+          { key: "step 2", value: "query Hedera Mirror Node" },
+          { key: "step 3", value: "check amount ≥ required" },
+          { key: "status", value: "verifying ⏳" },
         ],
       },
-      note: `Paymaster reads endpointSponsorshipBps[hash] = ${bpsPct * 100} bps. Budget check passes. Gas approved.`,
+      note: "Agent retries the same request with a PAYMENT-SIGNATURE header containing the Hedera tx ID, amount, and timestamp. Server begins verification.",
     },
+
+    // ── 4. Mirror Node verification ──────────────────────────────────────────
     {
       id: 3,
-      from: "AgentGate Paymaster", fromIcon: "🛡️",
-      to: "PublisherRegistry",     toIcon: "📋",
-      label: "endpoint config lookup",
+      from: "AgentGate Server", fromIcon: "🌐",
+      to: "Hedera Mirror Node", toIcon: "🔍",
+      label: "Verify tx on Mirror Node",
+      hasLiveData: isLive,
       request: {
-        title: "→ endpointSponsorshipBps[hash]",
+        title: "→ GET /api/v1/transactions/{txId}",
         fields: [
-          { key: "endpointHash", value: endpointHash, live: isLive },
-          { key: "registry",     value: reg },
+          { key: "txId",     value: txId,      highlight: true, live: isLive },
+          { key: "expected", value: `to=${serverAddr}, amount≥${tinybars}` },
         ],
       },
       response: {
-        title: "← Sponsorship config",
+        title: "← payment confirmed ✓",
         fields: [
-          { key: "bps",          value: `${bpsPct * 100}`, highlight: true, live: isLive },
-          { key: "coveredCost",  value: `maxCost × ${bpsPct}%`, highlight: true },
-          { key: "paymaster",    value: pm },
+          { key: "result",    value: "SUCCESS",         highlight: true },
+          { key: "amount",    value: `${tinybars} tinybars`, highlight: true, live: isLive },
+          { key: "to",        value: serverAddr },
+          { key: "from",      value: agentAddr,          live: isLive },
+          { key: "timestamp", value: isLive ? "confirmed" : "2026-04-03T18:22:45Z" },
         ],
       },
-      note: "Paymaster resolves the publisher's gas share. Only that portion counts against daily budget.",
+      note: "Server queries Hedera Mirror Node REST API to confirm the transaction is final, the amount is correct, and the recipient address matches.",
     },
+
+    // ── 5. Proxy forwarding (if configured) ──────────────────────────────────
     {
       id: 4,
-      from: "EntryPoint v0.7", fromIcon: "⚡",
-      to: "SmartAccount",      toIcon: "💼",
-      label: "executeUserOp()",
+      from: "AgentGate Server", fromIcon: "🌐",
+      to: "Upstream API", toIcon: "☁️",
+      label: "(proxy mode) forward to real API",
+      hasLiveData: false,
       request: {
-        title: "→ execute(target, value, callData)",
+        title: "→ forwarded request",
         fields: [
-          { key: "sender",   value: agentAddr, live: isLive },
-          { key: "target",   value: fmt(dep.deployer) },
-          { key: "value",    value: "0 " + net.currency },
-          { key: "callData", value: "0x (no-op)" },
+          { key: "to",        value: "api.open-meteo.com",      highlight: true },
+          { key: "path",      value: "/v1/forecast?lat=45.46&lon=9.19" },
+          { key: "x-api-key", value: "sk-•••••••••  (injected)", highlight: true },
+          { key: "note",      value: "key never exposed to agent" },
         ],
       },
       response: {
-        title: "← Execution result",
+        title: "← upstream 200 OK",
         fields: [
-          { key: "success",    value: "true ✓",        highlight: true },
-          { key: "returnData", value: "0x" },
-          { key: "txHash",     value: isLive ? fmt(ev!.txHash) : "(pending)", live: isLive },
+          { key: "status",      value: "200 OK ✓", highlight: true },
+          { key: "temperature", value: "18°C",      highlight: true },
+          { key: "condition",   value: "Partly Cloudy" },
+          { key: "humidity",    value: "62%" },
         ],
       },
-      note: "SmartAccount executes the agent's intent. No native token spent by the agent.",
+      note: "Proxy mode: server forwards the request to the real backend, injecting the publisher's private API key server-side. Skipped for direct endpoints.",
     },
+
+    // ── 6. Record call on-chain ──────────────────────────────────────────────
     {
       id: 5,
-      from: "EntryPoint v0.7",   fromIcon: "⚡",
-      to: "AgentGate Paymaster", toIcon: "🛡️",
-      label: "_postOp() — finalize",
+      from: "AgentGate Server", fromIcon: "🌐",
+      to: "PublisherRegistry", toIcon: "📋",
+      label: "recordCall() on Hedera",
       hasLiveData: isLive,
       request: {
-        title: "→ _postOp(mode, context, actualGasCost)",
+        title: "→ recordCall(endpointId, caller, revenue)",
         fields: [
-          { key: "mode",           value: "opSucceeded" },
-          { key: "actualGasCost",  value: gasCostEth,   highlight: true, live: isLive },
-          { key: "sponsorshipBps", value: `${bpsPct * 100}`,             live: isLive },
+          { key: "endpointId", value: "5" },
+          { key: "caller",     value: agentAddr,       live: isLive },
+          { key: "revenue",    value: "10000 (=$0.01 USDC)" },
+          { key: "registry",   value: reg },
         ],
       },
       response: {
-        title: "← Stats updated + event emitted",
+        title: "← stats updated on-chain",
         fields: [
-          { key: "gasUsed",    value: gasUsed,         highlight: true, live: isLive },
-          { key: "totalCalls", value: "+1" },
-          { key: "event",      value: `GasSponsored(${agentAddr}, ${bpsPct}%)`, live: isLive },
+          { key: "totalCalls",   value: "+1",    highlight: true },
+          { key: "totalRevenue", value: "+$0.01", highlight: true },
+          { key: "event",        value: "CallRecorded ✓" },
+          { key: "txHash",       value: txHash, live: isLive },
         ],
       },
-      note: isLive
-        ? `Real GasSponsored event emitted on-chain: gas=${gasUsed}, bps=${bpsPct * 100}`
-        : "EntryPoint calls _postOp with actual cost. Paymaster updates budget and emits event.",
+      note: "Server records the call in the PublisherRegistry on Hedera. Publisher's revenue accumulates immutably on-chain.",
     },
+
+    // ── 7. Final 200 response to agent ──────────────────────────────────────
     {
       id: 6,
-      from: "Bundler", fromIcon: "📦",
-      to: "AI Agent",  toIcon: "🤖",
-      label: "Receipt delivered",
+      from: "AgentGate Server", fromIcon: "🌐",
+      to: "AI Agent", toIcon: "🤖",
+      label: "200 OK — data delivered",
       hasLiveData: isLive,
       request: {
-        title: "→ UserOperationReceipt",
+        title: "← 200 OK",
         fields: [
-          { key: "success",   value: "true ✓",                  highlight: true },
-          { key: "txHash",    value: isLive ? fmt(ev!.txHash) : "—", highlight: true, live: isLive },
-          { key: "gasUsed",   value: gasUsed,                        live: isLive },
-          { key: "gasPaidBy", value: "AgentGate Paymaster",    highlight: true },
-          { key: "agentPaid", value: "0 " + net.currency + " 🎉" },
+          { key: "status",  value: "200 OK ✓",    highlight: true },
+          { key: "body",    value: `{"city":"Milan","temp":18,"condition":"Partly Cloudy"}`, highlight: true },
+          { key: "X-Paid",  value: `${hbarAmt} HBAR (tx: ${txHash})`, live: isLive },
         ],
       },
       response: {
-        title: "← Agent gets data",
+        title: "← agent receives",
         fields: [
-          { key: "status",  value: "200 OK" },
-          { key: "cost",    value: isLive ? `0 ${net.currency} gas (${bpsPct}% sponsored)` : `$0.00 gas + $0.01 USDC`, highlight: true, live: isLive },
-          { key: "latency", value: isLive ? "on-chain ✓" : "~2.1s" },
+          { key: "cost",    value: `$0.01 = ${tinybars} tinybars HBAR`, highlight: true, live: isLive },
+          { key: "gas",     value: "sponsored by publisher 🎉",          highlight: true },
+          { key: "latency", value: isLive ? "on-chain ✓" : "~3.2s total" },
+          { key: "proof",   value: "Hedera Mirror Node verified ✓" },
         ],
       },
       note: isLive
-        ? `Confirmed on-chain. TX: ${fmt(ev!.txHash)}. Agent paid zero gas.`
-        : "Agent receives response. Paid $0.01 USDC for data, zero gas management needed.",
+        ? `Verified on Hedera. TX: ${txHash}. Agent paid ${hbarAmt} HBAR — zero gas.`
+        : "Agent gets real data. Paid $0.01 in HBAR, zero gas thanks to publisher sponsorship.",
     },
   ];
 }
@@ -332,7 +351,7 @@ export function FlowDiagram({ networkId, totalCalls }: Props) {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <span style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.1em", color: "#555" }}>
-            ERC-4337 Gas Sponsorship Flow
+            x402 Payment Flow — Hedera Testnet
           </span>
 
           {/* Mode badge */}
@@ -543,80 +562,20 @@ export function FlowDiagram({ networkId, totalCalls }: Props) {
         })}
       </div>
 
-      {/* ── Live Events Feed ──────────────────────────────────────────────── */}
-      {networkId === "baseSepolia" && (
-        <div>
-          <div style={{
-            fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em",
-            color: "#2a2a2a", marginBottom: 8, paddingTop: 8,
-            borderTop: "1px solid #111",
-          }}>
-            {liveEvents.length > 0
-              ? `GasSponsored events — ${liveEvents.length} found (click to replay)`
-              : "No on-chain events yet — run: tsx src/send-userop.ts"}
-          </div>
-
-          {liveEvents.length === 0 ? (
-            <div style={{
-              fontSize: 10, color: "#2a2a2a",
-              background: "#080808", border: "1px solid #111", borderRadius: 6,
-              padding: "10px 14px", fontFamily: "'JetBrains Mono', monospace",
-            }}>
-              <span style={{ color: "#333" }}>$ </span>
-              <span style={{ color: "#4ade80" }}>cd packages/agent && ./node_modules/.bin/tsx src/send-userop.ts</span>
-              <br />
-              <span style={{ color: "#444", fontStyle: "italic" }}>
-                # sends a real ERC-4337 UserOperation — gas sponsored by AgentGatePaymaster
-              </span>
-            </div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-              {liveEvents.map((ev) => {
-                const isSelected = activeEvent?.txHash === ev.txHash;
-                return (
-                  <div
-                    key={ev.txHash}
-                    onClick={() => { setLiveEvent(ev); setTimeout(runAnimation, 150); }}
-                    style={{
-                      display: "flex", gap: 10, alignItems: "center",
-                      background: isSelected ? "#060f06" : "#090909",
-                      border: `1px solid ${isSelected ? "#1a3a1a" : "#1a1a1a"}`,
-                      borderRadius: 5, padding: "6px 10px",
-                      cursor: "pointer", transition: "all 0.2s",
-                      animation: "fadeIn 0.4s ease",
-                    }}
-                  >
-                    <div style={{ width: 6, height: 6, borderRadius: "50%", flexShrink: 0, background: isSelected ? "#4ade80" : "#374151" }} />
-                    <span style={{ fontSize: 9, color: isSelected ? "#4ade80" : "#555", fontWeight: 700, flexShrink: 0 }}>
-                      GasSponsored
-                    </span>
-                    <span style={{ fontSize: 9, color: "#444", flexShrink: 0 }}>
-                      {fmt(ev.agent)}
-                    </span>
-                    <span style={{ fontSize: 9, color: "#444", flexShrink: 0 }}>
-                      gas: {ev.gasUsed.toLocaleString()}
-                    </span>
-                    <span style={{ fontSize: 9, color: isSelected ? "#4ade80" : "#374151", flexShrink: 0 }}>
-                      {Math.round(ev.sponsorshipBps / 100)}% sponsored
-                    </span>
-                    <span style={{ fontSize: 9, color: "#333", flexShrink: 0 }}>
-                      block #{ev.blockNumber.toString()}
-                    </span>
-                    <a
-                      href={`https://sepolia.basescan.org/tx/${ev.txHash}`}
-                      target="_blank" rel="noopener noreferrer"
-                      onClick={(e) => e.stopPropagation()}
-                      style={{ fontSize: 9, color: net.color, marginLeft: "auto", textDecoration: "none", flexShrink: 0 }}
-                    >
-                      {fmt(ev.txHash)} ↗
-                    </a>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
+      {/* ── How to test ───────────────────────────────────────────────────── */}
+      <div style={{
+        fontSize: 10, color: "#2a2a2a",
+        background: "#080808", border: "1px solid #111", borderRadius: 6,
+        padding: "10px 14px", fontFamily: "'JetBrains Mono', monospace",
+        borderTop: "1px solid #111", marginTop: 4,
+      }}>
+        <span style={{ color: "#333" }}>$ </span>
+        <span style={{ color: net.color }}>cd packages/agent && npx tsx src/pay-hedera.ts</span>
+        <br />
+        <span style={{ color: "#333", fontStyle: "italic" }}>
+          # runs the full flow above — x402 + HBAR payment + Mirror Node verification
+        </span>
+      </div>
 
       <style>{`
         @keyframes pulse-dot {
