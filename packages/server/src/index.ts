@@ -166,11 +166,12 @@ const app = new Hono();
 app.route("/api/proxy", proxyRouter);
 
 // WorldID gate — applied to all protected routes before x402 sees the request
+// TODO?? rm
 app.use("/api/weather/*", requireWorldId);
 app.use("/api/prices/*",  requireWorldId);
 
 // Payment middleware (handles 402 challenge/response)
-const httpServer = new x402HTTPResourceServer(resourceServer, routes).onProtectedRequest(
+const httpServer = new x402HTTPResourceServer(resourceServer, routes as any).onProtectedRequest(
   hooks.requestHook
 );
 app.use(paymentMiddlewareFromHTTPServer(httpServer));
