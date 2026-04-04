@@ -8,7 +8,7 @@ import "@openzeppelin/contracts/access/Ownable.sol";
  * @notice Registry for API publishers and their x402-protected endpoints.
  *         Publishers register endpoints with prices and optional Paymaster addresses.
  */
-contract PublisherRegistry {
+contract PublisherRegistry is Ownable {
     struct Endpoint {
         uint256 id;
         address publisher;
@@ -25,6 +25,9 @@ contract PublisherRegistry {
     mapping(uint256 => Endpoint) public endpoints;
     mapping(address => uint256[]) public publisherEndpoints;
 
+    /// @notice Address allowed to call recordCall (set to server/relayer wallet by owner).
+    address public trustedCaller;
+
     // Events
     event EndpointRegistered(
         uint256 indexed id,
@@ -37,6 +40,13 @@ contract PublisherRegistry {
     event EndpointActivated(uint256 indexed id, address indexed publisher);
     event PaymasterUpdated(uint256 indexed id, address paymasterAddress);
     event CallRecorded(uint256 indexed id, address indexed caller, uint256 revenue);
+
+    constructor() Ownable(msg.sender) {}
+
+    /// @notice Authorize a server/relayer address to call recordCall.
+    function setTrustedCaller(address _caller) external onlyOwner {
+        trustedCaller = _caller;
+    }
 
     modifier onlyPublisher(uint256 endpointId) {
         require(endpoints[endpointId].publisher == msg.sender, "Not endpoint publisher");
@@ -100,9 +110,14 @@ contract PublisherRegistry {
     }
 
     /**
-     * @notice Record a successful API call (called by server after x402 payment)
+     * @notice Record a successful API call. Only callable by owner or the designated
+     *         trustedCaller (server/relayer). Public access was a griefable stat inflation vector.
      */
     function recordCall(uint256 endpointId) external {
+        require(
+            msg.sender == owner() || msg.sender == trustedCaller,
+            "recordCall: not authorized"
+        );
         require(endpoints[endpointId].isActive, "Endpoint inactive");
         endpoints[endpointId].totalCalls += 1;
         endpoints[endpointId].totalRevenue += endpoints[endpointId].pricePerCall;

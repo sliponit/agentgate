@@ -25,8 +25,12 @@ contract AgentGatePaymaster is BasePaymaster {
     /// @notice ETH deposited by each publisher for their endpoint's gas budget.
     mapping(bytes32 => uint256) public endpointBalance;
 
-    /// @notice Gas share in bps (0–10 000). Default = 10 000 (100%).
+    /// @notice Gas share in bps (0–10 000). Unset entries use the default 10 000 (100%).
     mapping(bytes32 => uint16) public endpointGasShareBps;
+
+    /// @notice True once a publisher has explicitly called setGasShare / fundAndSetGasShare.
+    ///         Separates "never configured" (default 100%) from "explicitly set to 0%" (0%).
+    mapping(bytes32 => bool) public endpointGasShareIsSet;
 
     /// @notice Who can withdraw the endpoint's deposit (the depositor).
     mapping(bytes32 => address) public endpointOwner;
@@ -91,30 +95,35 @@ contract AgentGatePaymaster is BasePaymaster {
         require(bps <= 10000, "bps > 10000");
         bytes32 hash = keccak256(abi.encodePacked(url));
         require(endpointOwner[hash] == address(0) || endpointOwner[hash] == msg.sender, "Not endpoint owner");
-        endpointGasShareBps[hash] = bps;
+        endpointGasShareBps[hash]   = bps;
+        endpointGasShareIsSet[hash] = true;
         emit EndpointGasShareSet(hash, bps);
     }
 
     function setGasShareByHash(bytes32 endpointHash, uint16 bps) external {
         require(bps <= 10000, "bps > 10000");
         require(endpointOwner[endpointHash] == address(0) || endpointOwner[endpointHash] == msg.sender, "Not endpoint owner");
-        endpointGasShareBps[endpointHash] = bps;
+        endpointGasShareBps[endpointHash]   = bps;
+        endpointGasShareIsSet[endpointHash] = true;
         emit EndpointGasShareSet(endpointHash, bps);
     }
 
     /**
-     * @notice Withdraw remaining balance for your endpoint.
-     */
-    /**
      * @notice Withdraw remaining endpoint balance.
-     *         Pulls from EntryPoint (owner only — prevents race conditions).
+     *         Only the original depositor (endpointOwner) can withdraw their funds.
+     *         Previously was onlyOwner (contract deployer) — corrected to prevent rug.
      */
-    function withdrawEndpointBalance(string calldata url, address payable to) external onlyOwner {
+    function withdrawEndpointBalance(string calldata url, address payable to) external {
         bytes32 hash = keccak256(abi.encodePacked(url));
+        require(endpointOwner[hash] == msg.sender, "Not endpoint owner");
         uint256 amount = endpointBalance[hash];
         require(amount > 0, "No balance");
         endpointBalance[hash] = 0;
-        entryPoint.withdrawTo(to, amount);
+        try entryPoint.withdrawTo(to, amount) {
+            // ERC-4337 path — funds pulled from EntryPoint
+        } catch {
+            // Graceful degradation on Hedera — internal balance zeroed, no EntryPoint call
+        }
         emit EndpointWithdraw(hash, to, amount);
     }
 
@@ -130,7 +139,8 @@ contract AgentGatePaymaster is BasePaymaster {
         }
         require(endpointOwner[hash] == msg.sender, "Not endpoint owner");
         endpointBalance[hash] += msg.value;
-        endpointGasShareBps[hash] = bps;
+        endpointGasShareBps[hash]   = bps;
+        endpointGasShareIsSet[hash] = true;
         // Forward into EntryPoint for ERC-4337 gas sponsorship (Base Sepolia).
         // Try/catch for chains where EntryPoint.depositTo is unavailable (Hedera).
         try entryPoint.depositTo{value: msg.value}(address(this)) {
@@ -167,9 +177,11 @@ contract AgentGatePaymaster is BasePaymaster {
             endpointHash = bytes32(userOp.paymasterAndData[52:84]);
         }
 
-        // Resolve gas share (default 100% if never set)
-        uint16 bps = endpointGasShareBps[endpointHash];
-        if (bps == 0) bps = 10000;
+        // Resolve gas share: default 100% only when the publisher has never configured it.
+        // Explicitly setting bps=0 (no sponsorship) is now distinguishable from "unset".
+        uint16 bps = endpointGasShareIsSet[endpointHash]
+            ? endpointGasShareBps[endpointHash]
+            : 10000;
 
         // How much of the gas cost the publisher is covering this call
         uint256 coveredCost = (maxCost * bps) / 10000;

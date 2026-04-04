@@ -55,7 +55,10 @@ const router = new Hono();
 
 // ── GET or POST /api/proxy/:endpointId[/*] ─────────────────────────────────
 router.all("/:endpointId{[0-9]+}/*?", async (c) => {
-  const endpointId = parseInt(c.req.param("endpointId"));
+  const endpointId = parseInt(c.req.param("endpointId"), 10);
+  if (isNaN(endpointId)) {
+    return c.json({ error: "Invalid endpoint ID" }, 400);
+  }
 
   // 1. Proxy config must exist
   const proxyConfig = proxyStore.get(endpointId);

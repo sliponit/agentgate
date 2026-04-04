@@ -16,6 +16,10 @@
 const HEDERA_TESTNET = "eip155:296";
 const MIRROR_NODE = "https://testnet.mirrornode.hedera.com";
 
+// Prevents a single tx hash from being replayed across concurrent requests.
+// In-memory; resets on restart. Sufficient for demo — persistent store needed in prod.
+const usedTxHashes = new Set<string>();
+
 export class HederaFacilitatorClient {
   async getSupported() {
     return {
@@ -29,6 +33,13 @@ export class HederaFacilitatorClient {
     if (!txHash) {
       return { isValid: false, invalidReason: "missing transaction hash in payload" };
     }
+
+    // Reject replayed tx hashes (race-condition double-spend protection)
+    if (usedTxHashes.has(txHash)) {
+      return { isValid: false, invalidReason: `transaction ${txHash} has already been used` };
+    }
+    // Reserve the hash immediately — before any async work — to close the race window
+    usedTxHashes.add(txHash);
 
     // Give Mirror Node a moment to index (Hedera ~3s finality)
     await new Promise((r) => setTimeout(r, 1500));
@@ -59,6 +70,8 @@ export class HederaFacilitatorClient {
 
       return this._checkResult(data, paymentRequirements);
     } catch (err: any) {
+      // Release the reservation so the agent can retry with the same tx after a network hiccup
+      usedTxHashes.delete(txHash);
       console.error("[HederaFacilitator] Mirror Node error:", err.message);
       return { isValid: false, invalidReason: `Mirror Node error: ${err.message}` };
     }
@@ -70,10 +83,18 @@ export class HederaFacilitatorClient {
       return { isValid: false, invalidReason: `transaction failed on-chain: ${data.result}` };
     }
 
-    // Must be sent to the publisher's address (case-insensitive)
+    // Recipient check — both sides must be present and must match.
+    // Previously used `if (payTo && to && ...)` which silently skipped the check
+    // when either value was falsy. Now we hard-fail on missing data.
     const payTo = (paymentRequirements.payTo || "").toLowerCase();
+    if (!payTo) {
+      return { isValid: false, invalidReason: "payment requirements missing payTo address" };
+    }
     const to = (data.to || "").toLowerCase();
-    if (payTo && to && to !== payTo) {
+    if (!to) {
+      return { isValid: false, invalidReason: "Mirror Node response missing recipient address (tx may not be a transfer)" };
+    }
+    if (to !== payTo) {
       return {
         isValid: false,
         invalidReason: `wrong recipient: sent to ${data.to}, expected ${paymentRequirements.payTo}`,

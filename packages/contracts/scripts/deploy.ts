@@ -67,9 +67,8 @@ async function main() {
 
   // ── 2. Deploy AgentGatePaymaster ─────────────────────────────────────────
   console.log("\n⛽ [2/4] Deploying AgentGatePaymaster...");
-  const dailyBudget = ethers.parseEther("0.01");
   const PaymasterFactory = await ethers.getContractFactory("AgentGatePaymaster");
-  const paymaster = await PaymasterFactory.deploy(entryPointAddr, dailyBudget);
+  const paymaster = await PaymasterFactory.deploy(entryPointAddr); // only IEntryPoint arg
   await paymaster.waitForDeployment();
 
   const paymasterAddress = await paymaster.getAddress();
@@ -99,14 +98,19 @@ async function main() {
   console.log(`   🔗  ${explorerTx(networkName, registerTxHash)}`);
 
   // ── 4. Fund Paymaster ────────────────────────────────────────────────────
-  console.log(`\n💸 [4/4] Funding Paymaster with 0.005 ${nativeCurrency}...`);
+  console.log(`\n💸 [4/4] Funding Paymaster gas budget with 0.005 ${nativeCurrency}...`);
   let fundTxHash = "skipped";
   try {
     const fundAmount = ethers.parseEther("0.005");
-    const fundTx = await (paymaster as any).deposit({ value: fundAmount });
+    // fundAndSetGasShare: deposit ETH and set 100% gas sponsorship in one call
+    const fundTx = await (paymaster as any).fundAndSetGasShare(
+      weatherUrl,
+      10000, // 100% gas share
+      { value: fundAmount, gasPrice: ethers.parseUnits("1200", "gwei") }
+    );
     await fundTx.wait();
     fundTxHash = fundTx.hash;
-    console.log(`✅ Paymaster funded`);
+    console.log(`✅ Paymaster funded (0.005 ${nativeCurrency}, 100% gas share)`);
     console.log(`   Tx:  ${fundTxHash}`);
     console.log(`   🔗  ${explorerTx(networkName, fundTxHash)}`);
   } catch (err: any) {
