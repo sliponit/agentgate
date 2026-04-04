@@ -76,7 +76,7 @@ Routes are in `packages/server/src/routes/` (weather, prices, proxy, publisher).
 - **Hedera HBAR payments**: Prices are in USD, converted to tinybars at runtime using Mirror Node exchange rate API (`/api/v1/network/exchangerate`). 1 HBAR = 10^8 tinybars. Hedera EVM: 1 ETH (wei) = 100 HBAR = 10^18 tinybars. Mirror Node polling at `/api/v1/contracts/results/{txHash}` confirms payment with ~3s finality.
 - **AgentKit (optional)**: WorldCoin AgentKit gives WorldID-verified agents 3 free API calls via `InMemoryAgentKitStorage` (resets on server restart — demo only, not persisted). Wallet-only agents (no AgentKit) can access all endpoints by paying HBAR directly — they get no free-trial and no account abstraction gas subsidies.
 - **Paymaster gas share**: Publishers deposit ETH and set a `gasShareBps` (0–10000). The paymaster covers that % of agent gas costs per call. `paymasterAndData[52:84]` carries the `endpointHash = keccak256(url)`. Post-op refunds over-reserved balance.
-- **Config**: All packages load `.env` from the repo root (see `.env.example`). Server config is in `packages/server/src/config.ts`. Contract addresses and deployment info are hardcoded in `packages/dashboard/src/lib/chains.ts`. Contract ABIs are manually defined in `packages/dashboard/src/lib/abi.ts` (not auto-generated).
+- **Config**: All packages load `.env` from the repo root. Required env vars: `PRIVATE_KEY` (publisher), `AGENT_PRIVATE_KEY`, `HEDERA_ACCOUNT_ID`, `WORLD_APP_ID`, `PIMLICO_API_KEY`. See `.env.example` for full list. Server config is in `packages/server/src/config.ts`. Contract addresses and deployment info are hardcoded in `packages/dashboard/src/lib/chains.ts`. Contract ABIs are manually defined in `packages/dashboard/src/lib/abi.ts` (not auto-generated).
 - **Network**: The project targets Hedera Testnet (chainId 296, RPC `https://testnet.hashio.io/api`, Mirror Node `https://testnet.mirrornode.hedera.com`). Base Sepolia config exists but is not actively used.
 
 ## Deployed Contracts (Hedera Testnet)
@@ -87,7 +87,7 @@ Routes are in `packages/server/src/routes/` (weather, prices, proxy, publisher).
 
 ## Known Quirks
 
-- **Vite proxy mismatch**: `packages/dashboard/vite.config.ts` proxies `/api` to `localhost:4021` (corrected from original `3001`), matching the server port.
+- **Vite proxy**: `packages/dashboard/vite.config.ts` proxies `/api` and `/health` to `localhost:4021`, matching the server port.
 - **Hedera gas price**: Hardcoded to 1200 Gwei in `hardhat.config.ts`; the dashboard fetches live gas price from Hedera JSON-RPC for cost estimates.
 - **BasePaymaster import**: Uses `@account-abstraction/contracts/core/BasePaymaster`; Hedera-specific try/catch wraps EntryPoint deposit calls for compatibility.
 - **No linter configured**: No ESLint, Prettier, or Biome config exists in the repo.
