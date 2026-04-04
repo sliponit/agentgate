@@ -28,21 +28,21 @@
     "chainId": 296,
     "deployer": "0x05a7Ae061c14847e0B70f7851d76FC10289d69b0",
     "publisherRegistry": "0xFBCee3E39A0909549fbc28cac37141d01f946189",
-    "paymaster": "0xfb274B563b2c1F9F9B77cf0944b99B00C006E754",
+    "paymaster": "0xfbC79b8d8b7659ce21DD37b82f988b9134c262a1",
     "entryPoint": "0x0000000071727De22E5E9d8BAf0edAc6f37da032",
     "deployTxHash": "0x062c3f7d3e16ce4c37915ca717b5a8381ef00904002d4e9a82d983625390adb0",
-    "paymasterDeployTxHash": "0x9b88f4be15234e6b9f0a26bc19e7e53e0919b7124db8dcbd8947dbf2e9ba1278",
+    "paymasterDeployTxHash": "0xe5111f3b4c5d00affdc2b670b973aa411755366c25364943266f025e89eb84aa",
     "registerEndpointTxHash": "0x6d1c070b819383678720b79850110a1929c1dc07456e8443bb44232cc99b5dcb",
-    "fundTxHash": "0xce093a0ebc7dbe630ee946d74177582d77a02562b306c976825fd3b247b026f5",
+    "fundTxHash": "0x1455d508a03a9766f335428967d0d9d6e8367a7ec25f65dff860c23f63387d82",
     "weatherEndpoint": "https://agentgate.demo/api/weather",
-    "deployedAt": "2026-04-03T21:53:37.290Z",
+    "deployedAt": "2026-04-04T00:29:35.704Z",
     "explorer": {
       "publisherRegistry": "https://hashscan.io/testnet/contract/0xFBCee3E39A0909549fbc28cac37141d01f946189",
-      "paymaster": "https://hashscan.io/testnet/contract/0xfb274B563b2c1F9F9B77cf0944b99B00C006E754",
+      "paymaster": "https://hashscan.io/testnet/contract/0xfbC79b8d8b7659ce21DD37b82f988b9134c262a1",
       "deployTx": "https://hashscan.io/testnet/tx/0x062c3f7d3e16ce4c37915ca717b5a8381ef00904002d4e9a82d983625390adb0",
-      "paymasterDeployTx": "https://hashscan.io/testnet/tx/0x9b88f4be15234e6b9f0a26bc19e7e53e0919b7124db8dcbd8947dbf2e9ba1278",
+      "paymasterDeployTx": "https://hashscan.io/testnet/tx/0xe5111f3b4c5d00affdc2b670b973aa411755366c25364943266f025e89eb84aa",
       "registerTx": "https://hashscan.io/testnet/tx/0x6d1c070b819383678720b79850110a1929c1dc07456e8443bb44232cc99b5dcb",
-      "fundTx": "https://hashscan.io/testnet/tx/0xce093a0ebc7dbe630ee946d74177582d77a02562b306c976825fd3b247b026f5"
+      "fundTx": "https://hashscan.io/testnet/tx/0x1455d508a03a9766f335428967d0d9d6e8367a7ec25f65dff860c23f63387d82"
     }
   }
 }

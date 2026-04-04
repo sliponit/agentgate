@@ -55,7 +55,7 @@ export const DEPLOYMENTS = {
   },
   hedera: {
     publisherRegistry: "0xFBCee3E39A0909549fbc28cac37141d01f946189" as `0x${string}`,
-    paymaster: "0xfb274B563b2c1F9F9B77cf0944b99B00C006E754" as `0x${string}`,
+    paymaster: "0xfbC79b8d8b7659ce21DD37b82f988b9134c262a1" as `0x${string}`,
     entryPoint: "0x0000000071727De22E5E9d8BAf0edAc6f37da032" as `0x${string}`,
     deployer: "0x05a7Ae061c14847e0B70f7851d76FC10289d69b0" as `0x${string}`,
     deployedAt: "2026-04-03T21:53:37.290Z",

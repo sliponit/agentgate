@@ -71,8 +71,14 @@ contract AgentGatePaymaster is BasePaymaster {
             endpointOwner[hash] = msg.sender;
         }
         endpointBalance[hash] += msg.value;
-        // Forward ETH into the EntryPoint so it's available for gas payments
-        entryPoint.depositTo{value: msg.value}(address(this));
+        // Forward native currency into the EntryPoint for gas sponsorship.
+        // Wrapped in try/catch so chains where EntryPoint.depositTo is
+        // unavailable (e.g. Hedera Testnet) still record the balance.
+        try entryPoint.depositTo{value: msg.value}(address(this)) {
+            // success — Base Sepolia ERC-4337 path
+        } catch {
+            // graceful degradation — balance tracked internally, no ERC-4337 relay
+        }
         emit EndpointFunded(hash, msg.sender, msg.value);
     }
 
@@ -125,7 +131,10 @@ contract AgentGatePaymaster is BasePaymaster {
         require(endpointOwner[hash] == msg.sender, "Not endpoint owner");
         endpointBalance[hash] += msg.value;
         endpointGasShareBps[hash] = bps;
-        entryPoint.depositTo{value: msg.value}(address(this));
+        // Forward into EntryPoint for ERC-4337 gas sponsorship (Base Sepolia).
+        // Try/catch for chains where EntryPoint.depositTo is unavailable (Hedera).
+        try entryPoint.depositTo{value: msg.value}(address(this)) {
+        } catch {}
         emit EndpointFunded(hash, msg.sender, msg.value);
         emit EndpointGasShareSet(hash, bps);
     }
