@@ -43,8 +43,9 @@ interface TestResult {
 }
 
 interface PublishResult {
-  txHash: string;
-  networkId: NetworkId;
+  txHash:     string;
+  networkId:  NetworkId;
+  endpointId: number;
 }
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
@@ -81,6 +82,14 @@ export function PublishForm({ networkId }: { networkId: NetworkId }) {
   // Live gas price from Hedera RPC (wei). Used to estimate sponsored calls.
   // A typical Hedera EVM call uses ~50,000–80,000 gas; we use 65,000 as the midpoint.
   const [gasPrice,      setGasPrice]      = useState<bigint>(1_200_000_000_000n); // 1200 Gwei fallback
+
+  // Proxy Mode
+  const [proxyEnabled,  setProxyEnabled]  = useState(false);
+  const [backendUrl,    setBackendUrl]    = useState("");
+  const [headerRows,    setHeaderRows]    = useState<{key: string; val: string}[]>([{ key: "", val: "" }]);
+  const [proxySaving,   setProxySaving]   = useState(false);
+  const [proxyDone,     setProxyDone]     = useState<string | null>(null); // proxyUrl
+  const [proxyError,    setProxyError]    = useState<string | null>(null);
 
   const [testing,       setTesting]       = useState(false);
   const [testResult,    setTestResult]    = useState<TestResult | null>(null);
@@ -159,6 +168,15 @@ export function PublishForm({ networkId }: { networkId: NetworkId }) {
     setPublishStep("");
 
     try {
+      // Read nextEndpointId before registering — that will be this endpoint's id
+      const registryClient = createPublicClient({ chain: hederaTestnet, transport: http(NETWORKS["hedera"].rpc) });
+      const nextId = await registryClient.readContract({
+        address: DEPLOYMENTS[selectedNet].publisherRegistry,
+        abi: [{ name: "nextEndpointId", type: "function", inputs: [], outputs: [{ type: "uint256" }], stateMutability: "view" }] as const,
+        functionName: "nextEndpointId",
+      });
+      const endpointId = Number(nextId as bigint);
+
       // Step 1: Register on PublisherRegistry
       setPublishStep("1/2 Registering endpoint…");
       const priceUnits = BigInt(Math.round(parseFloat(price) * 1_000_000));
@@ -170,7 +188,7 @@ export function PublishForm({ networkId }: { networkId: NetworkId }) {
         [url.trim(), priceUnits, paymasterAddress]
       );
 
-      setPublishResult({ txHash: regHash, networkId: selectedNet });
+      setPublishResult({ txHash: regHash, networkId: selectedNet, endpointId });
 
       // Step 2: Fund your gas budget on the Paymaster
       if (parseFloat(gasDeposit) > 0) {
@@ -199,6 +217,52 @@ export function PublishForm({ networkId }: { networkId: NetworkId }) {
     } finally {
       setPublishing(false);
       setPublishStep("");
+    }
+  }
+
+  // ── Configure proxy backend ────────────────────────────────────────────────
+  async function handleProxyConfig(endpointId: number) {
+    if (!wallet.state.connected) { await wallet.connect(); return; }
+    setProxySaving(true);
+    setProxyError(null);
+    setProxyDone(null);
+
+    try {
+      const SERVER = import.meta.env.VITE_SERVER_URL || "http://localhost:4021";
+      const injectHeaders: Record<string, string> = {};
+      for (const row of headerRows) {
+        if (row.key.trim()) injectHeaders[row.key.trim()] = row.val.trim();
+      }
+
+      const timestamp = Date.now();
+      const message   = `AgentGate proxy config\nendpointId: ${endpointId}\nbackendUrl: ${backendUrl.trim()}\ntimestamp: ${timestamp}`;
+
+      // Sign with connected wallet via MetaMask/Rabby
+      const signature = await (window as any).ethereum.request({
+        method:  "personal_sign",
+        params:  [message, wallet.state.address],
+      });
+
+      const res = await fetch(`${SERVER}/api/publisher/proxy-config`, {
+        method:  "POST",
+        headers: { "content-type": "application/json" },
+        body:    JSON.stringify({
+          endpointId,
+          backendUrl: backendUrl.trim(),
+          injectHeaders,
+          walletAddress: wallet.state.address,
+          signature,
+          timestamp,
+        }),
+      });
+
+      const data = await res.json() as any;
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      setProxyDone(data.proxyUrl);
+    } catch (e: any) {
+      setProxyError(e.message || String(e));
+    } finally {
+      setProxySaving(false);
     }
   }
 
@@ -510,6 +574,147 @@ export function PublishForm({ networkId }: { networkId: NetworkId }) {
               style={{ fontSize: 11, color: net.color }}>
               view registration on HashScan ↗
             </a>
+
+            {/* ── Proxy Mode ──────────────────────────────────────────────── */}
+            <div style={{ marginTop: 8 }}>
+              <button
+                onClick={() => { setProxyEnabled((v) => !v); setProxyError(null); setProxyDone(null); }}
+                style={{
+                  width: "100%", padding: "9px 0",
+                  fontFamily: "'JetBrains Mono', monospace", fontSize: 11, fontWeight: 700,
+                  borderRadius: 6, cursor: "pointer",
+                  border: `1px solid ${proxyEnabled ? net.color : "#252525"}`,
+                  background: proxyEnabled ? `${net.color}15` : "#0a0a0a",
+                  color: proxyEnabled ? net.color : "#555", transition: "all 0.2s",
+                }}
+              >
+                {proxyEnabled ? "▲ hide proxy setup" : "🔀 configure as proxy → forward to any API"}
+              </button>
+
+              {proxyEnabled && (
+                <div style={{
+                  marginTop: 10, padding: "16px", borderRadius: 8,
+                  background: "#080808", border: "1px solid #1e1e1e",
+                  display: "flex", flexDirection: "column", gap: 14,
+                }}>
+                  <div style={{ fontSize: 11, color: "#666", lineHeight: 1.6 }}>
+                    Forward paid requests to a real upstream API using your credentials.
+                    Agents pay HBAR, your API key is injected server-side and never exposed.
+                  </div>
+
+                  {/* Backend URL */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    <span style={{ fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                      Backend URL
+                    </span>
+                    <input
+                      type="url"
+                      placeholder="https://api.anthropic.com/v1/messages"
+                      value={backendUrl}
+                      onChange={(e) => setBackendUrl(e.target.value)}
+                      style={inputStyle}
+                    />
+                  </div>
+
+                  {/* Auth headers */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <span style={{ fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                        Auth Headers
+                      </span>
+                      <button
+                        onClick={() => setHeaderRows((r) => [...r, { key: "", val: "" }])}
+                        style={{
+                          background: "none", border: "1px solid #252525", color: "#555",
+                          fontSize: 10, padding: "2px 8px", borderRadius: 4, cursor: "pointer",
+                        }}
+                      >
+                        + add header
+                      </button>
+                    </div>
+                    {headerRows.map((row, i) => (
+                      <div key={i} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                        <input
+                          placeholder="x-api-key"
+                          value={row.key}
+                          onChange={(e) => setHeaderRows((r) => r.map((x, j) => j === i ? { ...x, key: e.target.value } : x))}
+                          style={{ ...inputStyle, width: "35%", fontSize: 11 }}
+                        />
+                        <span style={{ color: "#333", fontSize: 12 }}>:</span>
+                        <input
+                          placeholder="sk-ant-api03-..."
+                          value={row.val}
+                          onChange={(e) => setHeaderRows((r) => r.map((x, j) => j === i ? { ...x, val: e.target.value } : x))}
+                          style={{ ...inputStyle, flex: 1, fontSize: 11 }}
+                        />
+                        {headerRows.length > 1 && (
+                          <button
+                            onClick={() => setHeaderRows((r) => r.filter((_, j) => j !== i))}
+                            style={{ background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 14 }}
+                          >×</button>
+                        )}
+                      </div>
+                    ))}
+                    <div style={{ fontSize: 10, color: "#333" }}>
+                      Headers are stored server-side and never returned in API responses.
+                    </div>
+                  </div>
+
+                  {/* Save button */}
+                  {!proxyDone && (
+                    <button
+                      onClick={() => handleProxyConfig(publishResult.endpointId)}
+                      disabled={proxySaving || !backendUrl.trim()}
+                      style={{
+                        padding: "10px 0", fontFamily: "'JetBrains Mono', monospace",
+                        fontSize: 12, fontWeight: 700, borderRadius: 6,
+                        cursor: (proxySaving || !backendUrl.trim()) ? "default" : "pointer",
+                        border: `1px solid ${backendUrl.trim() ? net.color : "#1e1e1e"}`,
+                        background: backendUrl.trim() ? `${net.color}22` : "#080808",
+                        color: backendUrl.trim() ? net.color : "#333",
+                        transition: "all 0.2s",
+                      }}
+                    >
+                      {proxySaving ? "signing + saving…" : "🔒 sign + activate proxy →"}
+                    </button>
+                  )}
+
+                  {proxyDone && (
+                    <div style={{
+                      padding: "12px 14px", borderRadius: 6,
+                      background: "#081a08", border: "1px solid #1a3a1a",
+                      display: "flex", flexDirection: "column", gap: 6,
+                    }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: "#4ade80" }}>
+                        ✅ Proxy active
+                      </div>
+                      <div style={{ fontSize: 11, color: "#666" }}>
+                        Agents pay HBAR to call:
+                      </div>
+                      <code style={{
+                        fontSize: 11, color: net.color, wordBreak: "break-all",
+                        background: "#0a0a0a", padding: "6px 10px", borderRadius: 4,
+                      }}>
+                        {(import.meta.env.VITE_SERVER_URL || "http://localhost:4021")}{proxyDone}
+                      </code>
+                      <div style={{ fontSize: 10, color: "#444" }}>
+                        Server forwards to <strong style={{ color: "#666" }}>{backendUrl}</strong> with your injected headers. Your API key is never exposed.
+                      </div>
+                    </div>
+                  )}
+
+                  {proxyError && (
+                    <div style={{
+                      padding: "10px 12px", borderRadius: 6,
+                      background: "#1a0a0a", border: "1px solid #3a1a1a",
+                      fontSize: 11, color: "#f87171", wordBreak: "break-all",
+                    }}>
+                      ❌ {proxyError}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
 
             {/* Deposit status */}
             {hasDeposit && (

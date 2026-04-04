@@ -15,10 +15,12 @@ import {
   InMemoryAgentKitStorage,
 } from "@worldcoin/agentkit";
 
-import { config, HEDERA, HEDERA_MIRROR } from "./config";
+import { config, HEDERA } from "./config";
+import { usdToTinybars } from "./services/hbarRate";
 import weatherRouter from "./routes/weather";
 import pricesRouter from "./routes/prices";
 import publisherRouter from "./routes/publisher";
+import proxyRouter from "./routes/proxy";
 
 const payTo = config.publisherAddress as `0x${string}`;
 
@@ -54,26 +56,15 @@ const hooks     = createAgentkitHooks({
 const facilitatorClient = new LocalFacilitatorClient() as any;
 
 // Scheme for Hedera Testnet — native HBAR payments
-// Amount expressed in tinybars (1 HBAR = 10^8 tinybars)
-// Price fetched live from Mirror Node exchange rate API
+// Amount expressed in tinybars; live rate via shared hbarRate utility
 const hederaEvmScheme = new ExactEvmScheme().registerMoneyParser(
   async (amount: number, network: string) => {
     if (network !== HEDERA) return null;
-    let hbarPerUsd = 11.43; // fallback: ~$0.0875/HBAR → ~11.43 HBAR/$1
-    try {
-      const rateRes = await fetch(`${HEDERA_MIRROR}/api/v1/network/exchangerate`);
-      const rateData = await rateRes.json();
-      const { cent_equivalent, hbar_equivalent } = rateData.current_rate;
-      const usdPerHbar = cent_equivalent / 100 / hbar_equivalent;
-      hbarPerUsd = 1 / usdPerHbar;
-    } catch {
-      // use fallback
-    }
-    const tinybars = Math.ceil(amount * hbarPerUsd * 1e8); // USD → HBAR → tinybars
+    const tinybars = await usdToTinybars(amount);
     return {
-      amount: String(tinybars),
-      asset: "hbar",
-      extra: { name: "HBAR", decimals: 8, assetTransferMethod: "hedera-native" },
+      amount: tinybars.toString(),
+      asset:  "hbar",
+      extra:  { name: "HBAR", decimals: 8, assetTransferMethod: "hedera-native" },
     };
   }
 );
@@ -105,6 +96,10 @@ const routes = {
 
 // ── Hono app ──────────────────────────────────────────────────────────────────
 const app = new Hono();
+
+// Proxy routes — mounted BEFORE x402 middleware; handle their own 402 flow
+// so each endpoint can have its own dynamic price from the on-chain registry.
+app.route("/api/proxy", proxyRouter);
 
 // Payment middleware (handles 402 challenge/response)
 const httpServer = new x402HTTPResourceServer(resourceServer, routes).onProtectedRequest(
@@ -150,10 +145,12 @@ serve(
     console.log(`\n📡 Protected endpoints:`);
     console.log(`   GET /api/weather/:city  — $0.01  HBAR (Hedera Testnet)`);
     console.log(`   GET /api/prices/:token  — $0.005 HBAR (Hedera Testnet)`);
+    console.log(`\n🔀 Proxy endpoints (any registered API subscription):`);
+    console.log(`   ANY /api/proxy/:endpointId  — HBAR payment → forward to upstream`);
     console.log(`\n🔓 Public endpoints:`);
-    console.log(`   GET /health`);
-    console.log(`   POST /api/publisher/register`);
-    console.log(`   GET  /api/publisher/stats/:address`);
+    console.log(`   GET  /health`);
+    console.log(`   POST /api/publisher/proxy-config   — register proxy (wallet-signed)`);
+    console.log(`   GET  /api/publisher/proxy-config/:id`);
     console.log(`\n🆔 AgentKit: free-trial mode (3 uses), World Chain AgentBook`);
     console.log(`💳 Payments to: ${payTo}\n`);
   }
