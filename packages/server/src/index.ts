@@ -195,7 +195,8 @@ app.use("*", async (c, next) => {
   console.log(`${c.req.method} ${c.req.path} → ${c.res.status} ${ms}ms${payment}`);
 });
 
-// ── Start server ──────────────────────────────────────────────────────────────
+// ── Start server (skip on Vercel — it uses the exported app directly) ────────
+if (!process.env.VERCEL) {
 serve(
   {
     fetch: app.fetch,
@@ -218,5 +219,6 @@ serve(
     console.log(`💳 Payments to: ${payTo}\n`);
   }
 );
+}
 
 export default app;
