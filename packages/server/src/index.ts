@@ -145,6 +145,15 @@ async function enrichAgentKit(c: any, next: () => Promise<void>) {
 // ── Hono app ──────────────────────────────────────────────────────────────────
 const app = new Hono();
 
+// CORS — allow dashboard frontend (any origin for hackathon demo)
+app.use("*", async (c, next) => {
+  c.header("Access-Control-Allow-Origin", "*");
+  c.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  c.header("Access-Control-Allow-Headers", "Content-Type, Authorization, agentkit, AGENTKIT, payment-signature, PAYMENT-SIGNATURE, PAYMENT-REQUIRED, X-PAYMENT");
+  if (c.req.method === "OPTIONS") return new Response(null, { status: 204 });
+  return next();
+});
+
 // Proxy routes — mounted BEFORE x402 middleware; handle their own 402 flow
 // so each endpoint can have its own dynamic price from the on-chain registry.
 app.route("/api/proxy", proxyRouter);
