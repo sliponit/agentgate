@@ -30,6 +30,9 @@ export interface EndpointData {
   totalCalls: number;
   totalRevenue: string;
   registeredAt: Date;
+  // Proxy metadata (fetched from server, not on-chain)
+  proxyName?: string;
+  requireWorldId?: boolean;
 }
 
 const INITIAL: OnChainData = {
@@ -54,7 +57,7 @@ function getClient(networkId: NetworkId) {
   return createPublicClient({ chain, transport: http(cfg.rpc) });
 }
 
-export function useOnChainData(networkId: NetworkId, pollMs = 12000) {
+export function useOnChainData(networkId: NetworkId, pollMs = 30000) {
   const [data, setData] = useState<OnChainData>(INITIAL);
 
   const fetch = useCallback(async () => {
@@ -106,8 +109,21 @@ export function useOnChainData(networkId: NetworkId, pollMs = 12000) {
             args: [BigInt(i)],
           }) as readonly [bigint, `0x${string}`, string, bigint, `0x${string}`, boolean, bigint, bigint, bigint];
           if (ep[2]) { // skip empty slots (url would be empty string)
+            const epId = Number(ep[0]);
+            // Fetch proxy config from server (name + requireWorldId)
+            let proxyName: string | undefined;
+            let requireWorldId: boolean | undefined;
+            try {
+              const SERVER = import.meta.env.VITE_SERVER_URL || "http://localhost:4021";
+              const pcRes = await globalThis.fetch(`${SERVER}/api/publisher/proxy-config/${epId}`);
+              if (pcRes.ok) {
+                const pc = await pcRes.json() as any;
+                proxyName = pc.name;
+                requireWorldId = pc.requireWorldId;
+              }
+            } catch { /* server may be down */ }
             endpoints.push({
-              id: Number(ep[0]),
+              id: epId,
               publisher: ep[1],
               url: ep[2],
               pricePerCall: (Number(ep[3]) / 1_000_000).toFixed(4),
@@ -116,6 +132,8 @@ export function useOnChainData(networkId: NetworkId, pollMs = 12000) {
               totalCalls: Number(ep[6]),
               totalRevenue: (Number(ep[7]) / 1_000_000).toFixed(4),
               registeredAt: new Date(Number(ep[8]) * 1000),
+              proxyName,
+              requireWorldId,
             });
           }
         } catch {

@@ -38,10 +38,18 @@ export function EndpointTable({ networkId, endpoints, loading }: Props) {
                     style={{ background: ep.active ? net.color : "#333" }}
                     title={ep.active ? "Active" : "Inactive"}
                   />
-                  <span className="ep-url">{ep.url}</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    {ep.proxyName && (
+                      <div style={{ fontSize: 12, color: "#ccc", fontWeight: 600, marginBottom: 2 }}>{ep.proxyName}</div>
+                    )}
+                    <span className="ep-url">{ep.url}</span>
+                  </div>
                 </div>
-                <div className="ep-row-right">
-                  <span className="ep-pill">${ep.pricePerCall} USD/call (HBAR)</span>
+                <div className="ep-row-right" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  {ep.requireWorldId && (
+                    <span className="ep-badge-worldid" style={{ borderColor: `${net.color}44`, background: `${net.color}15`, color: net.color }}>WorldID</span>
+                  )}
+                  <span className="ep-pill">${ep.pricePerCall}/call</span>
                 </div>
               </div>
               <div className="ep-row-meta">
@@ -187,6 +195,16 @@ export function EndpointTable({ networkId, endpoints, loading }: Props) {
           text-decoration: none;
         }
         .ep-meta-link:hover { opacity: 0.75; }
+        .ep-badge-worldid {
+          font-size: 9px;
+          font-weight: 700;
+          padding: 2px 6px;
+          border-radius: 4px;
+          border: 1px solid;
+          text-transform: uppercase;
+          letter-spacing: 0.04em;
+          white-space: nowrap;
+        }
       `}</style>
     </div>
   );

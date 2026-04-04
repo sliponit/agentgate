@@ -179,7 +179,18 @@ export default function App() {
                   <div key={ep.id} className="sidebar-row" style={{ alignItems: "flex-start" }}>
                     <span className="sidebar-key" style={{ color: ep.active ? "#4ade80" : "#555" }}>#{ep.id}</span>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 10, color: "#888", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ep.url}</div>
+                      <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
+                        <span style={{ fontSize: 10, color: "#888", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {ep.proxyName || ep.url}
+                        </span>
+                        {ep.requireWorldId && (
+                          <span style={{
+                            fontSize: 8, padding: "1px 4px", borderRadius: 3, flexShrink: 0,
+                            background: `${net.color}15`, border: `1px solid ${net.color}33`, color: net.color,
+                            fontWeight: 700,
+                          }}>WID</span>
+                        )}
+                      </div>
                       <div style={{ fontSize: 9, color: "#444" }}>${ep.pricePerCall}/call · {ep.totalCalls} calls</div>
                     </div>
                   </div>
