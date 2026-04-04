@@ -378,17 +378,21 @@ export function ManageEndpoint({ networkId }: { networkId: NetworkId }) {
                   {isOwner && newBps !== info.bps && (
                     <button
                       onClick={() => handleSave("shareOnly")}
-                      disabled={saving || wrongNetwork}
+                      disabled={saving}
                       style={{
                         padding: "9px 0",
                         fontFamily: "'JetBrains Mono', monospace", fontSize: 12, fontWeight: 700,
-                        borderRadius: 6, cursor: (saving || wrongNetwork) ? "default" : "pointer",
+                        borderRadius: 6, cursor: saving ? "default" : "pointer",
                         border: `1px solid ${selectedNetData.color}`,
                         background: `${selectedNetData.color}15`,
                         color: selectedNetData.color, transition: "all 0.2s",
                       }}
                     >
-                      {saving && saveStep ? saveStep : `update share to ${gasSharePct}% (no top-up) →`}
+                      {saving && saveStep
+                        ? saveStep
+                        : wrongNetwork
+                        ? `switch to ${selectedNetData.label}`
+                        : `update share to ${gasSharePct}% (no top-up) →`}
                     </button>
                   )}
 
@@ -412,15 +416,15 @@ export function ManageEndpoint({ networkId }: { networkId: NetworkId }) {
                     {isOwner && (
                       <button
                         onClick={() => handleSave("topup")}
-                        disabled={saving || wrongNetwork || topUpFloat <= 0}
+                        disabled={saving || topUpFloat <= 0}
                         style={{
                           padding: "10px 0",
                           fontFamily: "'JetBrains Mono', monospace", fontSize: 12, fontWeight: 700,
                           borderRadius: 6,
-                          cursor: (saving || wrongNetwork || topUpFloat <= 0) ? "default" : "pointer",
-                          border: `1px solid ${(topUpFloat > 0 && !wrongNetwork) ? "#4ade80" : "#222"}`,
-                          background: (topUpFloat > 0 && !wrongNetwork) ? "#081a08" : "#080808",
-                          color: (topUpFloat > 0 && !wrongNetwork) ? "#4ade80" : "#333",
+                          cursor: (saving || topUpFloat <= 0) ? "default" : "pointer",
+                          border: `1px solid ${(topUpFloat > 0 || wrongNetwork) ? "#4ade80" : "#222"}`,
+                          background: (topUpFloat > 0 || wrongNetwork) ? "#081a08" : "#080808",
+                          color: (topUpFloat > 0 || wrongNetwork) ? "#4ade80" : "#333",
                           transition: "all 0.2s",
                         }}
                       >
