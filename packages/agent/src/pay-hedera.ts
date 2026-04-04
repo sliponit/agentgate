@@ -1,16 +1,17 @@
 /**
  * pay-hedera.ts
  *
- * Demonstrates a real x402 payment flow on Hedera Testnet (eip155:296):
+ * Demonstrates a real dual-protocol flow:
  *
  *   1. AI Agent calls a protected API endpoint
- *   2. Server returns 402 Payment Required with HBAR payment terms
- *   3. Agent sends native HBAR to the publisher via Hedera JSON-RPC relay
- *   4. Agent retries the request with the tx hash in X-PAYMENT header
- *   5. Server verifies payment on Hedera Mirror Node → serves the response
- *
- * The agent pays with HBAR. The publisher receives HBAR directly.
- * No API keys, no accounts, no centralized facilitator needed.
+ *   2. Server returns 402 Payment Required (x402 + WorldID AgentKit challenge)
+ *   3. Agent constructs a WorldID AgentKit proof (SIWE signed by agent wallet)
+ *      → Server verifies agent is registered in World Chain AgentBook
+ *      → If registered: free-trial access (first 3 calls)
+ *      → If not registered: proceeds to HBAR payment
+ *   4. Agent sends native HBAR on Hedera Testnet
+ *   5. Agent retries with PAYMENT-SIGNATURE (HBAR proof) + agentkit header (WorldID proof)
+ *   6. Server verifies both → serves the response
  *
  * Usage: tsx src/pay-hedera.ts
  */
@@ -21,12 +22,12 @@ import {
   createPublicClient,
   createWalletClient,
   http,
-  formatEther,
   type Hex,
   type Address,
 } from "viem";
 import { defineChain } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
+import { formatSIWEMessage } from "@worldcoin/agentkit";
 
 dotenv.config({ path: path.resolve(__dirname, "../../../.env") });
 
@@ -137,7 +138,49 @@ async function main() {
     throw new Error(`Transaction failed on-chain: ${txHash}`);
   }
 
-  // ── Step 5: Build x402 payment payload and retry ──────────────────────────
+  // ── Step 5a: Build WorldID AgentKit proof (SIWE signed by agent wallet) ────
+  // The server checks whether the agent's address is registered in the
+  // World Chain AgentBook (0xA23aB2712eA7BBa896930544C7d6636a96b944dA on eip155:480).
+  // - Registered (human-backed) → free-trial access (first 3 calls free)
+  // - Not registered             → falls through to HBAR payment as normal
+  // Either way the request succeeds; WorldID just determines who pays.
+  console.log(`\n🆔 Step 5a: Constructing WorldID AgentKit proof…`);
+
+  const nonce     = Math.random().toString(36).slice(2, 18);
+  const issuedAt  = new Date().toISOString();
+  const serverUrl = new URL(SERVER_URL);
+
+  const siweInfo = {
+    domain:    serverUrl.hostname + (serverUrl.port ? `:${serverUrl.port}` : ""),
+    uri:       endpoint,
+    version:   "1",
+    chainId:   "eip155:296",  // chain where agent is operating
+    nonce,
+    issuedAt,
+    statement: "Verify your agent is backed by a real human",
+  };
+
+  const siweMessage = formatSIWEMessage(siweInfo, account.address);
+  const siweSignature = await walletClient.signMessage({ message: siweMessage });
+
+  const agentKitPayload = {
+    domain:    siweInfo.domain,
+    address:   account.address,
+    statement: siweInfo.statement,
+    uri:       siweInfo.uri,
+    version:   siweInfo.version,
+    chainId:   siweInfo.chainId,
+    type:      "eip191",
+    nonce,
+    issuedAt,
+    signature: siweSignature,
+  };
+
+  const agentKitHeader = Buffer.from(JSON.stringify(agentKitPayload)).toString("base64");
+  console.log(`   ✅ AgentKit proof built (address: ${account.address})`);
+  console.log(`   📋 Server will check World Chain AgentBook for this address`);
+
+  // ── Step 5b: Build x402 payment payload ──────────────────────────────────
   // x402 v1 format: matching checks only scheme + network (avoids rate-drift issues)
   const paymentPayload = {
     x402Version: 1,
@@ -158,9 +201,12 @@ async function main() {
 
   const encodedPayment = Buffer.from(JSON.stringify(paymentPayload)).toString("base64");
 
-  console.log(`\n🔁 Step 5: Retrying with PAYMENT-SIGNATURE header…`);
+  console.log(`\n🔁 Step 5b: Retrying with PAYMENT-SIGNATURE + agentkit headers…`);
   const res2 = await fetch(endpoint, {
-    headers: { "PAYMENT-SIGNATURE": encodedPayment },
+    headers: {
+      "PAYMENT-SIGNATURE": encodedPayment,
+      "agentkit":          agentKitHeader,  // WorldID proof — server verifies on World Chain
+    },
   });
 
   console.log(`   → Status: ${res2.status} ${res2.statusText}`);
@@ -172,10 +218,12 @@ async function main() {
     console.log(`   ${JSON.stringify(data, null, 2).split("\n").join("\n   ")}`);
 
     console.log(`\n📊 Summary:`);
-    console.log(`   Agent paid:   ${hbarRequired.toFixed(6)} HBAR (≈ $${(hbarRequired * 0.087).toFixed(4)})`);
-    console.log(`   Publisher:    ${hederaOption.payTo}`);
-    console.log(`   Tx on-chain:  https://hashscan.io/testnet/tx/${txHash}`);
-    console.log(`   Payment standard: x402 (real on Hedera Testnet)`);
+    console.log(`   Agent paid:        ${hbarRequired.toFixed(6)} HBAR (≈ $${(hbarRequired * 0.087).toFixed(4)})`);
+    console.log(`   Publisher:         ${hederaOption.payTo}`);
+    console.log(`   Tx on-chain:       https://hashscan.io/testnet/tx/${txHash}`);
+    console.log(`   Payment standard:  x402 on Hedera Testnet`);
+    console.log(`   Identity proof:    WorldID AgentKit (World Chain AgentBook)`);
+    console.log(`   Agent address:     ${account.address}`);
   } else {
     const errBody = await res2.text();
     console.error(`\n❌ Payment rejected (${res2.status}): ${errBody}`);

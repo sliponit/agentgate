@@ -23,12 +23,29 @@ import publisherRouter from "./routes/publisher";
 const payTo = config.publisherAddress as `0x${string}`;
 
 // ── AgentKit setup ────────────────────────────────────────────────────────────
-const agentBook = createAgentBookVerifier({ network: "world" });
-const storage = new InMemoryAgentKitStorage();
-const hooks = createAgentkitHooks({
+// AgentBook verifier queries the World Chain contract to confirm the calling
+// agent was delegated by a real human who has a World ID.
+const agentBook = createAgentBookVerifier();
+const storage   = new InMemoryAgentKitStorage();
+const hooks     = createAgentkitHooks({
   agentBook,
   storage,
+  // WorldID-verified agents get 3 free calls; after that they pay HBAR like anyone else.
+  // Agents without a valid AgentBook entry bypass the free-trial and go straight to payment.
   mode: { type: "free-trial", uses: 3 },
+  onEvent: (event) => {
+    switch (event.type) {
+      case "agent_verified":
+        console.log(`[AgentKit] ✅ Human-backed agent verified: ${event.address} (humanId: ${event.humanId?.slice(0, 10)}…) → free access granted`);
+        break;
+      case "agent_not_verified":
+        console.log(`[AgentKit] ⚠ Agent ${event.address} not in World Chain AgentBook → payment required`);
+        break;
+      case "validation_failed":
+        console.log(`[AgentKit] ✗ AgentKit header validation failed: ${event.error}`);
+        break;
+    }
+  },
 });
 
 // ── x402 resource server ──────────────────────────────────────────────────────
