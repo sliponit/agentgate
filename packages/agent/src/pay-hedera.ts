@@ -52,9 +52,9 @@ const hederaTestnet = defineChain({
 // Hedera EVM unit conversion:
 // 1 HBAR = 10^8 tinybars
 // 1 ETH (EVM) = 100 HBAR → 10^18 wei = 10^10 tinybars
-// → 1 tinybar = 10^18 / 10^10 = 10^8 wei
-// → value_wei = tinybars * 10^8
-const WEI_PER_TINYBAR  = 100_000_000n; // 10^8
+// → 1 tinybar = 10^18 / 10^8 = 10^10 wei
+// → value_wei = tinybars * 10^10
+const WEI_PER_TINYBAR  = 10_000_000_000n; // 10^10
 const HEDERA_GAS_PRICE = 1_200_000_000_000n; // 1200 Gwei — Hedera testnet minimum
 
 // ─── Main ─────────────────────────────────────────────────────────────────────

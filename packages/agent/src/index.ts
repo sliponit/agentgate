@@ -57,7 +57,7 @@ function shortAddr(addr: string): string {
 const HEDERA_RPC       = process.env.HEDERA_TESTNET_RPC || "https://testnet.hashio.io/api";
 // Hedera EVM: 1 ETH = 100 HBAR, 1 HBAR = 10^8 tinybars
 // → 10^18 wei = 10^10 tinybars → 1 tinybar = 10^8 wei
-const WEI_PER_TINYBAR  = 100_000_000n; // 10^8
+const WEI_PER_TINYBAR  = 10_000_000_000n; // 10^10 (1 HBAR = 10^18 wei = 10^8 tinybars)
 const HEDERA_GAS_PRICE = 1_200_000_000_000n; // 1200 Gwei — Hedera testnet minimum
 
 const hederaTestnet = defineChain({
