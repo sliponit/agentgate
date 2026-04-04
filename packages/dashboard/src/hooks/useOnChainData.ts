@@ -68,13 +68,9 @@ export function useOnChainData(networkId: NetworkId) {
       const results = await Promise.allSettled([
         client.getBalance({ address: d.deployer }),                                                                                        // 0
         client.readContract({ address: d.entryPoint, abi: ENTRYPOINT_ABI, functionName: "balanceOf", args: [d.paymaster] }),               // 1
-        client.readContract({ address: d.paymaster,  abi: PAYMASTER_ABI,  functionName: "dailyBudget" }),                                  // 2
-        client.readContract({ address: d.paymaster,  abi: PAYMASTER_ABI,  functionName: "dailySpent" }),                                   // 3
-        client.readContract({ address: d.paymaster,  abi: PAYMASTER_ABI,  functionName: "getRemainingBudget" }),                           // 4
-        client.readContract({ address: d.paymaster,  abi: PAYMASTER_ABI,  functionName: "totalCalls" }),                                   // 5
-        client.readContract({ address: d.paymaster,  abi: PAYMASTER_ABI,  functionName: "getTotalSponsored" }),                            // 6
-        client.readContract({ address: d.paymaster,  abi: PAYMASTER_ABI,  functionName: "lastResetTimestamp" }),                           // 7
-        client.readContract({ address: d.publisherRegistry, abi: REGISTRY_ABI, functionName: "nextEndpointId" }),                         // 8
+        client.readContract({ address: d.paymaster,  abi: PAYMASTER_ABI,  functionName: "totalCalls" }),                                   // 2
+        client.readContract({ address: d.paymaster,  abi: PAYMASTER_ABI,  functionName: "getTotalSponsored" }),                            // 3
+        client.readContract({ address: d.publisherRegistry, abi: REGISTRY_ABI, functionName: "nextEndpointId" }),                         // 4
       ]);
 
       function val<T>(r: PromiseSettledResult<unknown>, fallback: T): T {
@@ -83,15 +79,10 @@ export function useOnChainData(networkId: NetworkId) {
 
       const deployerBalance  = val<bigint>(results[0], 0n);
       const paymasterDeposit = val<bigint>(results[1], 0n);
-      const dailyBudget      = val<bigint>(results[2], 0n);
-      const dailySpent       = val<bigint>(results[3], 0n);
-      const remainingBudget  = val<bigint>(results[4], 0n);
-      const totalCalls       = val<bigint>(results[5], 0n);
-      const totalSponsored   = val<bigint>(results[6], 0n);
-      const lastReset        = val<bigint>(results[7], 0n);
-      const nextId           = val<bigint>(results[8], 0n);
+      const totalCalls       = val<bigint>(results[2], 0n);
+      const totalSponsored   = val<bigint>(results[3], 0n);
+      const nextId           = val<bigint>(results[4], 0n);
 
-      // Log any individual failures for debugging
       results.forEach((r, i) => {
         if (r.status === "rejected") {
           console.warn(`[useOnChainData] call ${i} failed:`, r.reason?.shortMessage || r.reason?.message || r.reason);
@@ -144,12 +135,12 @@ export function useOnChainData(networkId: NetworkId) {
       setData({
         deployerBalance:  parseFloat(formatEther(deployerBalance)).toFixed(4),
         paymasterDeposit: parseFloat(formatEther(paymasterDeposit)).toFixed(6),
-        dailyBudget:      parseFloat(formatEther(dailyBudget)).toFixed(4),
-        dailySpent:       parseFloat(formatEther(dailySpent)).toFixed(6),
-        remainingBudget:  parseFloat(formatEther(remainingBudget)).toFixed(6),
+        dailyBudget:      "—",
+        dailySpent:       "—",
+        remainingBudget:  "—",
         totalCalls:       Number(totalCalls),
         totalSponsored:   parseFloat(formatEther(totalSponsored)).toFixed(8),
-        lastReset:        lastReset > 0n ? new Date(Number(lastReset) * 1000) : null,
+        lastReset:        null,
         totalEndpoints:   endpoints.length,
         endpoints,
         lastUpdated:      new Date(),
