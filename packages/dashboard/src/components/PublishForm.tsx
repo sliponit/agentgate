@@ -591,7 +591,7 @@ export function PublishForm({
               </div>
               <div style={{ fontSize: 10, color: requireWorldId ? `${net.color}88` : "#444", marginTop: 1 }}>
                 {requireWorldId
-                  ? "Only human-backed agents (WorldID verified) can access this endpoint"
+                  ? "Only human-backed agents (WorldID verified) can access. Verified agents get 3 free calls before paying HBAR."
                   : "Any agent with HBAR can access — no identity proof needed"}
               </div>
             </div>

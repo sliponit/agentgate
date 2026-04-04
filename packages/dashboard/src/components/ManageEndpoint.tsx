@@ -61,6 +61,14 @@ interface EndpointInfo {
   owner: `0x${string}`;
 }
 
+interface ProxyStats {
+  totalCalls: number;
+  freeTrialCalls: number;
+  paidCalls: number;
+  uniqueAgents: number;
+  requireWorldId: boolean;
+}
+
 interface MyEndpoint {
   id: number;
   url: string;
@@ -71,6 +79,7 @@ interface MyEndpoint {
   registeredAt: Date;
   gasBudget: bigint;      // wei from paymaster
   gasSharePct: number;    // 0–100
+  proxyStats?: ProxyStats;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -197,6 +206,14 @@ export function ManageEndpoint(_props: { networkId: NetworkId }) {
           gasSharePct  = Math.round(Number(bps) / 100);
         } catch { /* paymaster data optional */ }
 
+        // Fetch proxy call stats from server
+        let proxyStats: ProxyStats | undefined;
+        try {
+          const SERVER = import.meta.env.VITE_SERVER_URL || "http://localhost:4021";
+          const statsRes = await fetch(`${SERVER}/api/publisher/proxy-stats/${Number(ep[0])}`);
+          if (statsRes.ok) proxyStats = await statsRes.json() as ProxyStats;
+        } catch { /* proxy stats optional */ }
+
         return {
           id:           Number(ep[0]),
           url:          ep[2],
@@ -207,6 +224,7 @@ export function ManageEndpoint(_props: { networkId: NetworkId }) {
           registeredAt: new Date(Number(ep[8]) * 1000),
           gasBudget,
           gasSharePct,
+          proxyStats,
         } as MyEndpoint;
       }));
 
@@ -573,6 +591,34 @@ export function ManageEndpoint(_props: { networkId: NetworkId }) {
                       </div>
                     ))}
                   </div>
+
+                  {/* Proxy call stats */}
+                  {ep.proxyStats && (ep.proxyStats.totalCalls > 0 || ep.proxyStats.requireWorldId) && (
+                    <div style={{
+                      display: "flex", flexWrap: "wrap", gap: 8,
+                      padding: "8px 10px", borderRadius: 5,
+                      background: "#080808", border: "1px solid #151515",
+                    }}>
+                      {ep.proxyStats.requireWorldId && (
+                        <span style={{
+                          fontSize: 9, padding: "2px 6px", borderRadius: 3,
+                          background: `${selectedNetData.color}18`, border: `1px solid ${selectedNetData.color}44`,
+                          color: selectedNetData.color, fontWeight: 600,
+                        }}>WorldID</span>
+                      )}
+                      {[
+                        ["proxy calls", ep.proxyStats.totalCalls.toString()],
+                        ["free-trial",  ep.proxyStats.freeTrialCalls.toString()],
+                        ["paid",        ep.proxyStats.paidCalls.toString()],
+                        ["agents",      ep.proxyStats.uniqueAgents.toString()],
+                      ].map(([k, v]) => (
+                        <div key={k} style={{ display: "flex", gap: 4, alignItems: "baseline" }}>
+                          <span style={{ fontSize: 9, color: "#333" }}>{k}</span>
+                          <span style={{ fontSize: 10, color: "#666", fontFamily: "'JetBrains Mono', monospace", fontWeight: 600 }}>{v}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))}
             </>

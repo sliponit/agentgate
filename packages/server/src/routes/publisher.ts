@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { createPublicClient, http, recoverMessageAddress } from "viem";
 import { defineChain } from "viem";
-import { proxyStore } from "../services/proxyStore";
+import { proxyStore, callTracker } from "../services/proxyStore";
 
 const HEDERA_RPC  = process.env.HEDERA_TESTNET_RPC || "https://testnet.hashio.io/api";
 const REGISTRY    = (process.env.PUBLISHER_REGISTRY || "0xFBCee3E39A0909549fbc28cac37141d01f946189") as `0x${string}`;
@@ -251,6 +251,46 @@ router.get("/proxy-config/:endpointId", (c) => {
     registeredAt:   config.registeredAt,
     proxyUrl:       `/api/proxy/${config.endpointId}`,
   });
+});
+
+/**
+ * GET /api/publisher/proxy-stats/:endpointId
+ * Returns call stats for an endpoint (total, free-trial, paid, unique agents).
+ */
+router.get("/proxy-stats/:endpointId", (c) => {
+  const id = parseInt(c.req.param("endpointId"));
+  if (isNaN(id)) return c.json({ error: "Invalid endpointId" }, 400);
+  const config = proxyStore.get(id);
+  return c.json({
+    endpointId: id,
+    requireWorldId: config?.requireWorldId ?? false,
+    ...callTracker.getStats(id),
+  });
+});
+
+/**
+ * GET /api/publisher/proxy-stats/:endpointId/agent/:address
+ * Returns per-agent stats including free-trial remaining.
+ */
+router.get("/proxy-stats/:endpointId/agent/:address", (c) => {
+  const id = parseInt(c.req.param("endpointId"));
+  const address = c.req.param("address");
+  if (isNaN(id)) return c.json({ error: "Invalid endpointId" }, 400);
+  const config = proxyStore.get(id);
+  return c.json({
+    endpointId: id,
+    agentAddress: address,
+    requireWorldId: config?.requireWorldId ?? false,
+    ...callTracker.getAgentStats(id, address),
+  });
+});
+
+/**
+ * GET /api/publisher/proxy-stats
+ * Returns stats for all endpoints.
+ */
+router.get("/proxy-stats", (c) => {
+  return c.json(callTracker.getAllStats());
 });
 
 export default router;

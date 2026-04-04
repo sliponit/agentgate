@@ -14,7 +14,7 @@
 import { Hono } from "hono";
 import { createPublicClient, http } from "viem";
 import { defineChain } from "viem";
-import { proxyStore } from "../services/proxyStore";
+import { proxyStore, callTracker } from "../services/proxyStore";
 import { HederaFacilitatorClient } from "../services/hederaFacilitator";
 import { usdToTinybars } from "../services/hbarRate";
 import { validateAgentKitHeader } from "../services/agentkit";
@@ -52,7 +52,42 @@ const REGISTRY_ABI = [
 
 const facilitator = new HederaFacilitatorClient();
 
+
 const router = new Hono();
+
+/** Forward the request to the upstream backend (shared by free-trial + paid paths) */
+async function forwardToUpstream(c: any, proxyConfig: any, endpointId: number): Promise<Response> {
+  const method     = c.req.method;
+  const bodyBuffer = method !== "GET" && method !== "HEAD" ? await c.req.arrayBuffer() : undefined;
+
+  const upstreamHeaders: Record<string, string> = {};
+  const ct = c.req.header("content-type");
+  if (ct) upstreamHeaders["content-type"] = ct;
+  const accept = c.req.header("accept");
+  if (accept) upstreamHeaders["accept"] = accept;
+
+  for (const [k, v] of Object.entries(proxyConfig.injectHeaders as Record<string, string>)) {
+    upstreamHeaders[k.toLowerCase()] = v;
+  }
+
+  const rawPath  = c.req.path;
+  const suffix   = rawPath.replace(new RegExp(`^/api/proxy/${endpointId}`), "");
+  const upstream = proxyConfig.backendUrl.replace(/\/$/, "") + suffix;
+  const qs       = c.req.url.includes("?") ? "?" + c.req.url.split("?")[1] : "";
+
+  let upstreamRes: Response;
+  try {
+    upstreamRes = await fetch(upstream + qs, { method, headers: upstreamHeaders, body: bodyBuffer });
+  } catch (err: any) {
+    console.error(`[proxy] Upstream fetch failed:`, err.message);
+    return c.json({ error: `Upstream error: ${err.message}` }, 502);
+  }
+
+  console.log(`[proxy] ← upstream ${upstreamRes.status} for endpoint #${endpointId} → ${upstream}`);
+  const upstreamBody = await upstreamRes.arrayBuffer();
+  const upCt = upstreamRes.headers.get("content-type") || "application/json";
+  return new Response(upstreamBody, { status: upstreamRes.status, headers: { "content-type": upCt } });
+}
 
 // ── GET or POST /api/proxy/:endpointId[/*] ─────────────────────────────────
 router.all("/:endpointId/*", async (c) => {
@@ -84,11 +119,61 @@ router.all("/:endpointId/*", async (c) => {
     console.warn(`[proxy] Could not read endpoint #${endpointId} from chain:`, err.message);
   }
 
-  // 3. Check for payment
+  // 3. WorldID free-trial check (before payment)
+  // If publisher requires WorldID and agent provides a valid proof with AgentBook membership,
+  // grant up to 3 free calls before requiring HBAR payment.
+  const agentkitHeader = c.req.header("agentkit") ?? c.req.header("AGENTKIT");
+  let worldIdVerified = false;
+  let worldIdAddress: string | undefined;
+
+  if (agentkitHeader) {
+    const akResult = await validateAgentKitHeader(agentkitHeader, c.req.url);
+    if (akResult.valid && akResult.humanId) {
+      worldIdVerified = true;
+      worldIdAddress = akResult.address;
+      console.log(`[proxy] ✅ WorldID verified: ${akResult.address} (humanId: ${akResult.humanId.slice(0, 10)}…)`);
+
+      // Free-trial: skip payment for verified agents
+      const trial = callTracker.checkFreeTrial(akResult.address!, endpointId);
+      if (trial.allowed) {
+        callTracker.consumeFreeTrial(akResult.address!, endpointId);
+        callTracker.record(endpointId, akResult.address!, true);
+        console.log(`[proxy] 🎟  Free-trial call ${trial.used + 1}/3 for ${akResult.address} on endpoint #${endpointId}`);
+        // Skip payment — jump straight to forwarding (step 5)
+        return await forwardToUpstream(c, proxyConfig, endpointId);
+      }
+      console.log(`[proxy] Free-trial exhausted for ${akResult.address} on endpoint #${endpointId} — payment required`);
+    } else if (akResult.valid && !akResult.humanId) {
+      console.log(`[proxy] AgentKit valid but not in AgentBook: ${akResult.address} — no free-trial`);
+    } else {
+      // Invalid agentkit header — if WorldID is required, reject immediately
+      if (proxyConfig.requireWorldId) {
+        return c.json({ error: `WorldID verification failed: ${akResult.error}`, requireWorldId: true }, 403);
+      }
+    }
+  }
+
+  // If WorldID is required but no valid proof provided, reject before payment
+  if (proxyConfig.requireWorldId && !worldIdVerified) {
+    const amount = await usdToTinybars(priceUsd);
+    const paymentRequired: any = {
+      x402Version: 1,
+      accepts: [{
+        scheme: "exact", network: "eip155:296", payTo,
+        amount: amount.toString(), asset: "hbar",
+        extra: { name: "HBAR", decimals: 8, assetTransferMethod: "hedera-native" },
+      }],
+      requireWorldId: true,
+      worldIdInfo: "This endpoint requires WorldID. Include a valid `agentkit` header. Verified agents get 3 free calls.",
+    };
+    c.header("PAYMENT-REQUIRED", Buffer.from(JSON.stringify(paymentRequired)).toString("base64"));
+    return c.json(paymentRequired, 402);
+  }
+
+  // 4. Check for payment
   const paymentHeader = c.req.header("PAYMENT-SIGNATURE") || c.req.header("payment-signature");
 
   if (!paymentHeader) {
-    // Return a proper 402 challenge
     const amount  = await usdToTinybars(priceUsd);
     const accepts = [{
       scheme:  "exact",
@@ -99,10 +184,9 @@ router.all("/:endpointId/*", async (c) => {
       extra:   { name: "HBAR", decimals: 8, assetTransferMethod: "hedera-native" },
     }];
     const paymentRequired: any = { x402Version: 1, accepts };
-    // If WorldID is required, include agentkit info so agents know they need it
     if (proxyConfig.requireWorldId) {
       paymentRequired.requireWorldId = true;
-      paymentRequired.worldIdInfo = "This endpoint requires a valid WorldID AgentKit proof. Include an `agentkit` header with your SIWE-signed proof.";
+      paymentRequired.freeTrialInfo = "WorldID-verified agents get 3 free calls. Include `agentkit` header for free-trial.";
     }
     const encoded = Buffer.from(JSON.stringify(paymentRequired)).toString("base64");
     c.header("PAYMENT-REQUIRED", encoded);
@@ -110,7 +194,7 @@ router.all("/:endpointId/*", async (c) => {
     return c.json(paymentRequired, 402);
   }
 
-  // 4. Verify payment
+  // 5. Verify payment
   let paymentPayload: any;
   try {
     paymentPayload = JSON.parse(Buffer.from(paymentHeader, "base64").toString("utf-8"));
@@ -128,72 +212,10 @@ router.all("/:endpointId/*", async (c) => {
   }
 
   console.log(`[proxy] ✅ Payment verified for endpoint #${endpointId} ($${priceUsd} USD → ${amount} tinybars HBAR)`);
+  callTracker.record(endpointId, worldIdAddress || "unknown", false);
 
-  // 4b. WorldID check (if publisher requires it)
-  if (proxyConfig.requireWorldId) {
-    const agentkitHeader = c.req.header("agentkit") ?? c.req.header("AGENTKIT");
-    if (!agentkitHeader) {
-      return c.json({
-        error: "This endpoint requires WorldID verification. Include a valid `agentkit` header with your SIWE-signed proof.",
-        requireWorldId: true,
-      }, 403);
-    }
-    const akResult = await validateAgentKitHeader(agentkitHeader, c.req.url);
-    if (!akResult.valid) {
-      return c.json({ error: `WorldID verification failed: ${akResult.error}`, requireWorldId: true }, 403);
-    }
-    if (!akResult.humanId) {
-      return c.json({
-        error: `Agent ${akResult.address} is not registered in the World Chain AgentBook. Register at worldcoin.org.`,
-        requireWorldId: true,
-      }, 403);
-    }
-    console.log(`[proxy] ✅ WorldID verified: ${akResult.address} (humanId: ${akResult.humanId.slice(0, 10)}…)`);
-  }
-
-  // 5. Forward to upstream backend
-  const method      = c.req.method;
-  const bodyBuffer  = method !== "GET" && method !== "HEAD" ? await c.req.arrayBuffer() : undefined;
-
-  // Build upstream headers: forward content-type + inject publisher auth headers
-  const upstreamHeaders: Record<string, string> = {};
-  const ct = c.req.header("content-type");
-  if (ct) upstreamHeaders["content-type"] = ct;
-  const accept = c.req.header("accept");
-  if (accept) upstreamHeaders["accept"] = accept;
-
-  // Inject the publisher's private auth headers (API keys etc.)
-  for (const [k, v] of Object.entries(proxyConfig.injectHeaders)) {
-    upstreamHeaders[k.toLowerCase()] = v;
-  }
-
-  // Forward path suffix after /api/proxy/:id/
-  const rawPath   = c.req.path; // e.g. /api/proxy/5/v1/messages
-  const suffix    = rawPath.replace(new RegExp(`^/api/proxy/${endpointId}`), ""); // → /v1/messages
-  const upstream  = proxyConfig.backendUrl.replace(/\/$/, "") + suffix;
-  const qs        = c.req.url.includes("?") ? "?" + c.req.url.split("?")[1] : "";
-
-  let upstreamRes: Response;
-  try {
-    upstreamRes = await fetch(upstream + qs, {
-      method,
-      headers: upstreamHeaders,
-      body:    bodyBuffer,
-    });
-  } catch (err: any) {
-    console.error(`[proxy] Upstream fetch failed:`, err.message);
-    return c.json({ error: `Upstream error: ${err.message}` }, 502);
-  }
-
-  console.log(`[proxy] ← upstream ${upstreamRes.status} for endpoint #${endpointId} → ${upstream}`);
-
-  // Return upstream response verbatim (preserve content-type, status)
-  const upstreamBody = await upstreamRes.arrayBuffer();
-  const upCt         = upstreamRes.headers.get("content-type") || "application/json";
-  return new Response(upstreamBody, {
-    status:  upstreamRes.status,
-    headers: { "content-type": upCt },
-  });
+  // 6. Forward to upstream backend
+  return await forwardToUpstream(c, proxyConfig, endpointId);
 });
 
 export default router;
