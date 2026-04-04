@@ -3,15 +3,14 @@
  *
  * Demonstrates a real dual-protocol flow:
  *
- *   1. AI Agent calls a protected API endpoint
- *   2. Server returns 402 Payment Required (x402 + WorldID AgentKit challenge)
- *   3. Agent constructs a WorldID AgentKit proof (SIWE signed by agent wallet)
- *      → Server verifies agent is registered in World Chain AgentBook
- *      → If registered: free-trial access (first 3 calls)
- *      → If not registered: proceeds to HBAR payment
- *   4. Agent sends native HBAR on Hedera Testnet
- *   5. Agent retries with PAYMENT-SIGNATURE (HBAR proof) + agentkit header (WorldID proof)
- *   6. Server verifies both → serves the response
+ *   1. Agent builds WorldID AgentKit proof (SIWE signed by agent wallet)
+ *   2. Agent calls the endpoint WITH the agentkit header
+ *      → Server verifies WorldID BEFORE issuing payment details
+ *      → If not in AgentBook: 403 immediately (agent never pays)
+ *      → If verified: 402 with payment details (or 200 on free trial)
+ *   3. Agent sends native HBAR on Hedera Testnet
+ *   4. Agent retries with PAYMENT-SIGNATURE (HBAR proof) + agentkit header
+ *   5. Server verifies both → serves the response
  *
  * Usage: tsx src/pay-hedera.ts
  */
@@ -77,24 +76,81 @@ async function main() {
   const balanceHbar = Number(balanceWei) / 1e18;
   console.log(`💰 Balance:       ${balanceHbar.toFixed(4)} HBAR`);
 
-  // ── Step 1: Initial request → 402 ──────────────────────────────────────────
-  const endpoint = `${SERVER_URL}/api/weather/rome`;
-  console.log(`\n📡 Step 1: GET ${endpoint}`);
+  // ── Step 1: Build WorldID AgentKit proof FIRST (before any payment) ──────
+  // Server requires agentkit on the initial request so it can verify WorldID
+  // before issuing payment details. This prevents paying and then getting a 403.
+  console.log(`\n🆔 Step 1: Constructing WorldID AgentKit proof…`);
 
-  const res1 = await fetch(endpoint);
+  const endpoint  = `${SERVER_URL}/api/weather/rome`;
+  const serverUrl = new URL(SERVER_URL);
+  const nonce     = Math.random().toString(36).slice(2, 18);
+  const issuedAt  = new Date().toISOString();
+
+  const siweInfo = {
+    domain:    serverUrl.hostname, // AgentKit validates against hostname only (no port)
+    uri:       endpoint,
+    version:   "1",
+    chainId:   "eip155:296",
+    type:      "eip191" as const,
+    nonce,
+    issuedAt,
+    statement: "Verify your agent is backed by a real human",
+  };
+
+  const siweMessage   = formatSIWEMessage(siweInfo, account.address);
+  const siweSignature = await walletClient.signMessage({ message: siweMessage });
+
+  const agentKitPayload = {
+    domain:    siweInfo.domain,
+    address:   account.address,
+    statement: siweInfo.statement,
+    uri:       siweInfo.uri,
+    version:   siweInfo.version,
+    chainId:   siweInfo.chainId,
+    type:      "eip191",
+    nonce,
+    issuedAt,
+    signature: siweSignature,
+  };
+
+  const agentKitHeader = Buffer.from(JSON.stringify(agentKitPayload)).toString("base64");
+  console.log(`   ✅ AgentKit proof built (address: ${account.address})`);
+
+  // ── Step 2: Initial request with agentkit proof → 402 (or 200 free trial) ─
+  console.log(`\n📡 Step 2: GET ${endpoint} (with agentkit header)`);
+
+  const res1 = await fetch(endpoint, {
+    headers: { "agentkit": agentKitHeader },
+  });
   console.log(`   → Status: ${res1.status} ${res1.statusText}`);
+
+  if (res1.status === 403) {
+    const body = await res1.text();
+    console.error(`\n🚫 WorldID check failed — NOT paying (wallet safe):`);
+    console.error(`   ${body}`);
+    console.log("\n" + "═".repeat(62) + "\n");
+    return;
+  }
+
+  if (res1.status === 200) {
+    const data = await res1.json();
+    console.log(`\n🎉 Free trial access granted! API response:`);
+    console.log(`   ${JSON.stringify(data, null, 2).split("\n").join("\n   ")}`);
+    console.log("\n" + "═".repeat(62) + "\n");
+    return;
+  }
 
   if (res1.status !== 402) {
     const body = await res1.text();
     throw new Error(`Expected 402 but got ${res1.status}: ${body}`);
   }
 
-  // ── Step 2: Parse payment requirements ────────────────────────────────────
+  // ── Step 3: Parse payment requirements ────────────────────────────────────
   const paymentRequiredHeader = res1.headers.get("PAYMENT-REQUIRED") || res1.headers.get("X-PAYMENT-REQUIRED");
   if (!paymentRequiredHeader) throw new Error("No PAYMENT-REQUIRED header in 402 response");
 
   const paymentRequired = JSON.parse(Buffer.from(paymentRequiredHeader, "base64").toString("utf-8"));
-  console.log(`\n📋 Step 2: Payment Required`);
+  console.log(`\n📋 Step 3: Payment Required`);
   console.log(`   Accepts ${paymentRequired.accepts?.length ?? paymentRequired.length ?? "?"} payment options`);
 
   // Find Hedera option
@@ -118,8 +174,8 @@ async function main() {
   console.log(`   Required:        ${tinybarsRequired} tinybars (≈ ${hbarRequired.toFixed(6)} HBAR)`);
   console.log(`   Pay to:          ${hederaOption.payTo}`);
 
-  // ── Step 3: Send HBAR ──────────────────────────────────────────────────────
-  console.log(`\n💸 Step 3: Sending ${hbarRequired.toFixed(6)} HBAR to ${hederaOption.payTo}…`);
+  // ── Step 4: Send HBAR ──────────────────────────────────────────────────────
+  console.log(`\n💸 Step 4: Sending ${hbarRequired.toFixed(6)} HBAR to ${hederaOption.payTo}…`);
 
   const txHash = await walletClient.sendTransaction({
     to: hederaOption.payTo as Address,
@@ -129,8 +185,8 @@ async function main() {
   console.log(`   ✅ Tx submitted:  ${txHash}`);
   console.log(`   🔗 https://hashscan.io/testnet/tx/${txHash}`);
 
-  // ── Step 4: Wait for confirmation (Hedera ~3s finality) ───────────────────
-  console.log(`\n⏳ Step 4: Waiting for Hedera confirmation (~3s)…`);
+  // ── Step 5: Wait for confirmation (Hedera ~3s finality) ───────────────────
+  console.log(`\n⏳ Step 5: Waiting for Hedera confirmation (~3s)…`);
   const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
   console.log(`   ✅ Confirmed in block ${receipt.blockNumber} (status: ${receipt.status})`);
 
@@ -138,50 +194,7 @@ async function main() {
     throw new Error(`Transaction failed on-chain: ${txHash}`);
   }
 
-  // ── Step 5a: Build WorldID AgentKit proof (SIWE signed by agent wallet) ────
-  // The server checks whether the agent's address is registered in the
-  // World Chain AgentBook (0xA23aB2712eA7BBa896930544C7d6636a96b944dA on eip155:480).
-  // - Registered (human-backed) → free-trial access (first 3 calls free)
-  // - Not registered             → falls through to HBAR payment as normal
-  // Either way the request succeeds; WorldID just determines who pays.
-  console.log(`\n🆔 Step 5a: Constructing WorldID AgentKit proof…`);
-
-  const nonce     = Math.random().toString(36).slice(2, 18);
-  const issuedAt  = new Date().toISOString();
-  const serverUrl = new URL(SERVER_URL);
-
-  const siweInfo = {
-    domain:    serverUrl.hostname + (serverUrl.port ? `:${serverUrl.port}` : ""),
-    uri:       endpoint,
-    version:   "1",
-    chainId:   "eip155:296",  // chain where agent is operating
-    type:      "eip191" as const,
-    nonce,
-    issuedAt,
-    statement: "Verify your agent is backed by a real human",
-  };
-
-  const siweMessage = formatSIWEMessage(siweInfo, account.address);
-  const siweSignature = await walletClient.signMessage({ message: siweMessage });
-
-  const agentKitPayload = {
-    domain:    siweInfo.domain,
-    address:   account.address,
-    statement: siweInfo.statement,
-    uri:       siweInfo.uri,
-    version:   siweInfo.version,
-    chainId:   siweInfo.chainId,
-    type:      "eip191",
-    nonce,
-    issuedAt,
-    signature: siweSignature,
-  };
-
-  const agentKitHeader = Buffer.from(JSON.stringify(agentKitPayload)).toString("base64");
-  console.log(`   ✅ AgentKit proof built (address: ${account.address})`);
-  console.log(`   📋 Server will check World Chain AgentBook for this address`);
-
-  // ── Step 5b: Build x402 payment payload ──────────────────────────────────
+  // ── Step 6: Build x402 payment payload and retry ─────────────────────────
   // x402 v1 format: matching checks only scheme + network (avoids rate-drift issues)
   const paymentPayload = {
     x402Version: 1,
@@ -202,7 +215,7 @@ async function main() {
 
   const encodedPayment = Buffer.from(JSON.stringify(paymentPayload)).toString("base64");
 
-  console.log(`\n🔁 Step 5b: Retrying with PAYMENT-SIGNATURE + agentkit headers…`);
+  console.log(`\n🔁 Step 6: Retrying with PAYMENT-SIGNATURE + agentkit headers…`);
   const res2 = await fetch(endpoint, {
     headers: {
       "PAYMENT-SIGNATURE": encodedPayment,

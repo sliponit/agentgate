@@ -126,8 +126,13 @@ async function requireWorldId(c: any, next: () => Promise<void>) {
       );
     }
 
-    // No proof and no payment → let x402 fire the 402 challenge (which includes the agentkit extension)
-    return next();
+    // No agentkit and no payment → block immediately so the agent never pays before being verified.
+    // The agent must include a valid agentkit header on the FIRST request; if WorldID check passes,
+    // x402 will issue the 402 with payment details. This prevents paying-then-getting-403.
+    return c.json(
+      { error: "WorldID AgentKit proof required. Include a valid `agentkit` header with your first request. Register your agent at worldcoin.org." },
+      403
+    );
   }
 
   try {

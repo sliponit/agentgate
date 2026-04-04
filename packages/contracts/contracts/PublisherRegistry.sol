@@ -13,7 +13,7 @@ contract PublisherRegistry is Ownable {
         uint256 id;
         address publisher;
         string url;
-        uint256 pricePerCall; // in USDC (6 decimals, so $0.01 = 10000)
+        uint256 pricePerCall; // USD quote, 6 decimals ($0.01 = 10000); off-chain settles in HBAR
         address paymasterAddress; // 0x0 if no paymaster
         bool isActive;
         uint256 totalCalls;
@@ -56,7 +56,7 @@ contract PublisherRegistry is Ownable {
     /**
      * @notice Register a new API endpoint
      * @param url The API endpoint URL
-     * @param pricePerCall Price in USDC (6 decimals)
+     * @param pricePerCall USD amount, 6 decimals (settlement is HBAR off-chain)
      * @param paymasterAddress Address of the Paymaster (0x0 if none)
      */
     function registerEndpoint(

@@ -41,7 +41,7 @@ export function EndpointTable({ networkId, endpoints, loading }: Props) {
                   <span className="ep-url">{ep.url}</span>
                 </div>
                 <div className="ep-row-right">
-                  <span className="ep-pill">${ep.pricePerCall} USDC/call</span>
+                  <span className="ep-pill">${ep.pricePerCall} USD/call (HBAR)</span>
                 </div>
               </div>
               <div className="ep-row-meta">

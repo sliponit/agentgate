@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { NetworkId, NETWORKS } from "./lib/chains";
 import { useOnChainData } from "./hooks/useOnChainData";
 import { NetworkCard } from "./components/NetworkCard";
@@ -6,6 +6,7 @@ import { FlowDiagram } from "./components/FlowDiagram";
 import { EndpointTable } from "./components/EndpointTable";
 import { PublishForm } from "./components/PublishForm";
 import { ManageEndpoint } from "./components/ManageEndpoint";
+import { DemoScenarios } from "./components/DemoScenarios";
 
 type View = "dashboard" | "flow" | "publish" | "manage";
 
@@ -14,6 +15,8 @@ const NETWORK_IDS: NetworkId[] = ["hedera"];
 export default function App() {
   const [activeNet, setActiveNet] = useState<NetworkId>("hedera");
   const [view, setView]           = useState<View>("dashboard");
+  const [publishDemo, setPublishDemo] = useState<"vacation" | "article" | null>(null);
+  const clearPublishDemo = useCallback(() => setPublishDemo(null), []);
   const { data, refetch }         = useOnChainData(activeNet);
   const net = NETWORKS[activeNet];
 
@@ -75,6 +78,13 @@ export default function App() {
 
       {view === "dashboard" && (
         <>
+          <DemoScenarios
+            networkId={activeNet}
+            onChoose={(id) => {
+              setPublishDemo(id);
+              setView("publish");
+            }}
+          />
           <main className="main-grid">
             <section className="panel">
               <NetworkCard networkId={activeNet} data={data} />
@@ -101,10 +111,14 @@ export default function App() {
           <div className="section-header">
             <span className="section-title">Publish New Endpoint</span>
             <span className="section-sub">
-              Test your endpoint before registering it on {net.label}
+              Test your endpoint before registering it on {net.label}. Use presets below for sponsor-ready demos.
             </span>
           </div>
-          <PublishForm networkId={activeNet} />
+          <PublishForm
+            networkId={activeNet}
+            demoTemplate={publishDemo}
+            onDemoTemplateConsumed={clearPublishDemo}
+          />
         </section>
       )}
 

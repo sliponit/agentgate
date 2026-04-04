@@ -197,7 +197,7 @@ function buildSteps(
         fields: [
           { key: "endpointId", value: "5" },
           { key: "caller",     value: agentAddr,       live: isLive },
-          { key: "revenue",    value: "10000 (=$0.01 USDC)" },
+          { key: "revenue",    value: "10000 units = $0.01 USD → tinybars via Mirror" },
           { key: "registry",   value: reg },
         ],
       },
@@ -427,6 +427,26 @@ export function FlowDiagram({ networkId, totalCalls }: Props) {
             {running ? "▶ running…" : isLiveMode ? "▶ replay last tx" : "▶ simulate"}
           </button>
         </div>
+      </div>
+
+      {/* ── Sponsor-facing use cases (short) ──────────────────────────────── */}
+      <div
+        style={{
+          padding: "10px 14px",
+          borderRadius: 6,
+          background: "#080808",
+          border: "1px solid #1a1a1a",
+          fontSize: 11,
+          color: "#666",
+          lineHeight: 1.55,
+        }}
+      >
+        <span style={{ color: net.color, fontWeight: 700, marginRight: 8 }}>Use cases</span>
+        <strong style={{ color: "#888" }}>Idle API</strong>
+        {" — "}sell access to a subscription you already pay for (Claude, Gemini, …) via Proxy mode while you are away.
+        <span style={{ color: "#333", margin: "0 6px" }}>·</span>
+        <strong style={{ color: "#888" }}>Pay per article</strong>
+        {" — "}one GET = one micropayment in HBAR for a news piece or blog post; no card on file.
       </div>
 
       {/* ── Live event banner ─────────────────────────────────────────────── */}

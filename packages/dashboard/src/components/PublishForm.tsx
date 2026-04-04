@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { createPublicClient, http } from "viem";
 import { NetworkId, NETWORKS, DEPLOYMENTS, hederaTestnet } from "../lib/chains";
 import { useWallet } from "../hooks/useWallet";
@@ -62,6 +62,13 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
   );
 }
 
+/** Accepts `0.03` or locale `0,03` — plain parseFloat would yield 0 for the latter. */
+function parseDecimalInput(raw: string): number {
+  const s = String(raw).trim().replace(/\s/g, "").replace(/,/g, ".");
+  const n = parseFloat(s);
+  return Number.isFinite(n) ? n : NaN;
+}
+
 const inputStyle: React.CSSProperties = {
   background: "#0d0d0d", border: "1px solid #252525", borderRadius: 6,
   color: "#e5e7eb", fontFamily: "'JetBrains Mono', monospace", fontSize: 12,
@@ -69,7 +76,34 @@ const inputStyle: React.CSSProperties = {
   boxSizing: "border-box", transition: "border-color 0.2s",
 };
 
-export function PublishForm({ networkId }: { networkId: NetworkId }) {
+const NEXT_ENDPOINT_ID_ABI = [
+  { name: "nextEndpointId", type: "function", inputs: [], outputs: [{ type: "uint256" }], stateMutability: "view" },
+] as const;
+
+/** Base URL agents use (on-chain URL / paymaster). */
+function publicAgentGateBase(): string {
+  return (import.meta.env.VITE_SERVER_URL || "http://localhost:4021").replace(/\/$/, "");
+}
+
+/** Health check URL: in dev without VITE_SERVER_URL, use same-origin + Vite proxy (avoids CORS). */
+function healthCheckUrl(): string {
+  if (import.meta.env.DEV && !import.meta.env.VITE_SERVER_URL) {
+    return "/health";
+  }
+  return `${publicAgentGateBase()}/health`;
+}
+
+type DemoTemplate = "vacation" | "article";
+
+export function PublishForm({
+  networkId,
+  demoTemplate,
+  onDemoTemplateConsumed,
+}: {
+  networkId: NetworkId;
+  demoTemplate?: DemoTemplate | null;
+  onDemoTemplateConsumed?: () => void;
+}) {
   const net    = NETWORKS[networkId];
   const wallet = useWallet();
 
@@ -83,8 +117,8 @@ export function PublishForm({ networkId }: { networkId: NetworkId }) {
   // A typical Hedera EVM call uses ~50,000–80,000 gas; we use 65,000 as the midpoint.
   const [gasPrice,      setGasPrice]      = useState<bigint>(1_200_000_000_000n); // 1200 Gwei fallback
 
-  // Proxy Mode
-  const [proxyEnabled,  setProxyEnabled]  = useState(false);
+  // Proxy Mode — default ON (most users don't have their own endpoint)
+  const [proxyEnabled,  setProxyEnabled]  = useState(true);
   const [backendUrl,    setBackendUrl]    = useState("");
   const [headerRows,    setHeaderRows]    = useState<{key: string; val: string}[]>([{ key: "", val: "" }]);
   const [proxyDone,     setProxyDone]     = useState<string | null>(null); // proxyUrl
@@ -101,6 +135,62 @@ export function PublishForm({ networkId }: { networkId: NetworkId }) {
 
   const urlRef = useRef<HTMLInputElement>(null);
 
+  const applyDemoPreset = useCallback((t: DemoTemplate) => {
+    setTestResult(null);
+    setPublishResult(null);
+    setPublishError(null);
+    setDepositError(null);
+    setProxyDone(null);
+    setProxyError(null);
+    if (t === "vacation") {
+      setProxyEnabled(true);
+      setBackendUrl("https://api.anthropic.com/v1/messages");
+      setPrice("0.02");
+      setUrl(""); // filled by useEffect: …/api/proxy/<nextId>
+      setHeaderRows([
+        { key: "x-api-key", val: "" },
+        { key: "anthropic-version", val: "2023-06-01" },
+      ]);
+    } else {
+      setProxyEnabled(false);
+      setBackendUrl("");
+      setPrice("0.03");
+      setUrl("https://jsonplaceholder.typicode.com/posts/1");
+      setHeaderRows([{ key: "", val: "" }]);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!demoTemplate) return;
+    applyDemoPreset(demoTemplate);
+    onDemoTemplateConsumed?.();
+  }, [demoTemplate, applyDemoPreset, onDemoTemplateConsumed]);
+
+  // Proxy mode: on-chain URL must match paymaster funding — use next registry id (no fake third-party URL).
+  useEffect(() => {
+    if (!proxyEnabled) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const registryClient = createPublicClient({
+          chain: hederaTestnet,
+          transport: http(NETWORKS[selectedNet].rpc),
+        });
+        const nextId = await registryClient.readContract({
+          address:   DEPLOYMENTS[selectedNet].publisherRegistry,
+          abi:       NEXT_ENDPOINT_ID_ABI,
+          functionName: "nextEndpointId",
+        });
+        if (cancelled) return;
+        const n = Number(nextId as bigint);
+        setUrl(`${publicAgentGateBase()}/api/proxy/${n}`);
+      } catch {
+        /* keep manual url */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [proxyEnabled, selectedNet]);
+
   // Fetch live gas price from Hedera JSON-RPC relay on mount
   useEffect(() => {
     const client = createPublicClient({ chain: hederaTestnet, transport: http(NETWORKS["hedera"].rpc) });
@@ -111,12 +201,58 @@ export function PublishForm({ networkId }: { networkId: NetworkId }) {
 
   // ── Test endpoint ─────────────────────────────────────────────────────────
   async function handleTest() {
-    if (!url.trim()) { urlRef.current?.focus(); return; }
     setTesting(true);
     setTestResult(null);
     setPublishResult(null);
     setPublishError(null);
     const t0 = Date.now();
+
+    // Proxy: we only verify AgentGate is reachable + backend URL is set — not a random public 200 URL.
+    if (proxyEnabled) {
+      if (!backendUrl.trim()) {
+        setTesting(false);
+        setTestResult({
+          ok: false, status: 0, statusText: "—", latencyMs: 0, isX402: false, contentType: null, bodyPreview: "",
+          errorMsg: "Set Backend URL first (e.g. https://api.openai.com).",
+        });
+        return;
+      }
+      try {
+        const res = await fetch(healthCheckUrl(), { signal: AbortSignal.timeout(8000) });
+        const latencyMs   = Date.now() - t0;
+        const contentType = res.headers.get("content-type");
+        const ok          = res.status === 200;
+        let bodyPreview   = "";
+        try {
+          bodyPreview = ok
+            ? `✓ AgentGate server OK (${publicAgentGateBase()}).\n\nOn-chain URL (paymaster/registry): ${url.trim() || "(loading…)"}\nBackend (OpenAI, Anthropic, …): ${backendUrl.trim()}\n\nAfter publish, agents pay x402 → AgentGate forwards to your backend with injected headers.`
+            : await res.text();
+        } catch { bodyPreview = ""; }
+        setTestResult({
+          ok,
+          status: res.status,
+          statusText: res.statusText,
+          latencyMs,
+          isX402: false,
+          contentType,
+          bodyPreview,
+          errorMsg: ok ? undefined : `Health check failed — is the server running? (${res.status})`,
+        });
+      } catch (e: any) {
+        setTestResult({
+          ok: false, status: 0, statusText: "Error", latencyMs: Date.now() - t0,
+          isX402: false, contentType: null, bodyPreview: "",
+          errorMsg: e.name === "TimeoutError"
+            ? "Timeout — start AgentGate server (pnpm --filter @agentgate/server dev)"
+            : e.message || String(e),
+        });
+      } finally {
+        setTesting(false);
+      }
+      return;
+    }
+
+    if (!url.trim()) { urlRef.current?.focus(); setTesting(false); return; }
     try {
       const res = await fetch(url.trim(), { method: "GET", signal: AbortSignal.timeout(8000) });
       const latencyMs    = Date.now() - t0;
@@ -132,8 +268,18 @@ export function PublishForm({ networkId }: { networkId: NetworkId }) {
           try {
             const parsed = JSON.parse(atob(paymentHeader.split(".")[0])) as any;
             const acc = parsed?.accepts?.[0];
+            let priceStr: string | undefined;
+            if (acc?.amount != null) {
+              if (acc.network === "eip155:296" || acc.asset === "hbar") {
+                const tb = BigInt(String(acc.amount));
+                const hbar = Number(tb) / 1e8;
+                priceStr = `≈ ${hbar.toFixed(6)} HBAR (USD quote, live rate)`;
+              } else {
+                priceStr = `$${(Number(acc.amount) / 1e6).toFixed(4)} USD`;
+              }
+            }
             paymentRequired = {
-              price:   acc?.amount ? `$${(Number(acc.amount) / 1e6).toFixed(4)} USDC` : undefined,
+              price:   priceStr,
               network: acc?.network, asset: acc?.asset,
             };
           } catch { /* ignore */ }
@@ -171,14 +317,18 @@ export function PublishForm({ networkId }: { networkId: NetworkId }) {
       const registryClient = createPublicClient({ chain: hederaTestnet, transport: http(NETWORKS["hedera"].rpc) });
       const nextId = await registryClient.readContract({
         address: DEPLOYMENTS[selectedNet].publisherRegistry,
-        abi: [{ name: "nextEndpointId", type: "function", inputs: [], outputs: [{ type: "uint256" }], stateMutability: "view" }] as const,
+        abi: NEXT_ENDPOINT_ID_ABI,
         functionName: "nextEndpointId",
       });
       const endpointId = Number(nextId as bigint);
 
       // Step 1: Register on PublisherRegistry
       setPublishStep("1/2 Registering endpoint…");
-      const priceUnits = BigInt(Math.round(parseFloat(price) * 1_000_000));
+      const priceNum = parseDecimalInput(price);
+      if (!Number.isFinite(priceNum) || priceNum < 0) {
+        throw new Error("Invalid price — use a decimal number (e.g. 0.03)");
+      }
+      const priceUnits = BigInt(Math.round(priceNum * 1_000_000));
       const regHash = await wallet.writeContract(
         selectedNet,
         DEPLOYMENTS[selectedNet].publisherRegistry,
@@ -189,14 +339,15 @@ export function PublishForm({ networkId }: { networkId: NetworkId }) {
 
       setPublishResult({ txHash: regHash, networkId: selectedNet, endpointId });
 
-      const totalSteps = (parseFloat(gasDeposit) > 0 ? 1 : 0) + (proxyEnabled && backendUrl.trim() ? 1 : 0) + 1;
+      const gasNum = parseDecimalInput(gasDeposit);
+      const totalSteps = (Number.isFinite(gasNum) && gasNum > 0 ? 1 : 0) + (proxyEnabled && backendUrl.trim() ? 1 : 0) + 1;
       let step = 1;
 
       // Step 2 (optional): Fund gas budget on the Paymaster
-      if (parseFloat(gasDeposit) > 0) {
+      if (Number.isFinite(gasNum) && gasNum > 0) {
         step++;
         setPublishStep(`${step}/${totalSteps} Depositing gas budget…`);
-        const depositWei = BigInt(Math.round(parseFloat(gasDeposit) * 1e18));
+        const depositWei = BigInt(Math.round(gasNum * 1e18));
         const bps        = Math.round(gasSharePct * 100);
         try {
           await wallet.writeContract(
@@ -265,7 +416,7 @@ export function PublishForm({ networkId }: { networkId: NetworkId }) {
     setDepositError(null);
     setPublishStep("Depositing gas budget…");
     try {
-      const depositWei = BigInt(Math.round(parseFloat(gasDeposit) * 1e18));
+      const depositWei = BigInt(Math.round(parseDecimalInput(gasDeposit) * 1e18));
       const bps        = Math.round(gasSharePct * 100);
       await wallet.writeContract(
         selectedNet,
@@ -286,14 +437,17 @@ export function PublishForm({ networkId }: { networkId: NetworkId }) {
 
   const wrongNetwork = wallet.state.connected && wallet.state.chainId !== NETWORKS[selectedNet].chainId;
   const canPublish   = testResult?.ok && !publishing && !publishResult;
-  const hasDeposit   = parseFloat(gasDeposit) > 0;
+  const gasDepositNum = parseDecimalInput(gasDeposit);
+  const priceInputNum = parseDecimalInput(price || "0");
+  const registryUnits = Number.isFinite(priceInputNum) ? Math.round(priceInputNum * 1_000_000) : 0;
+  const hasDeposit    = Number.isFinite(gasDepositNum) && gasDepositNum > 0;
 
   // Real estimate: deposit (wei) / cost-per-call (wei)
   // cost-per-call = gasPrice × ~65,000 gas (typical EVM contract call on Hedera)
   const GAS_PER_CALL  = 65_000n;
   const costPerCallWei = gasPrice * GAS_PER_CALL;
-  const depositWei     = parseFloat(gasDeposit) > 0
-    ? BigInt(Math.round(parseFloat(gasDeposit) * 1e18))
+  const depositWei     = hasDeposit
+    ? BigInt(Math.round(gasDepositNum * 1e18))
     : 0n;
   const estCalls       = costPerCallWei > 0n && depositWei > 0n
     ? Number(depositWei / costPerCallWei)
@@ -319,27 +473,174 @@ export function PublishForm({ networkId }: { networkId: NetworkId }) {
         </div>
       </Field>
 
-      {/* ── Endpoint URL ────────────────────────────────────────────────────── */}
-      <Field label="Endpoint URL" hint="— must return 200 or 402">
-        <div style={{ display: "flex", gap: 8 }}>
-          <input ref={urlRef} type="url" placeholder="https://api.yourservice.com/endpoint"
-            value={url} onChange={(e) => { setUrl(e.target.value); setTestResult(null); }}
-            onKeyDown={(e) => e.key === "Enter" && handleTest()}
-            style={{ ...inputStyle, flex: 1 }} />
-          <button onClick={handleTest} disabled={testing || !url.trim()}
+      {/* ── Demo presets (sponsor stories) ──────────────────────────────────── */}
+      <div style={{
+        display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8,
+        padding: "10px 12px", borderRadius: 6, background: "#080808", border: "1px solid #1a1a1a",
+      }}>
+        <span style={{ fontSize: 10, color: "#444", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          Demo preset
+        </span>
+        <button
+          type="button"
+          onClick={() => applyDemoPreset("vacation")}
+          style={{
+            padding: "6px 10px", borderRadius: 5, border: `1px solid ${net.color}44`,
+            background: `${net.color}12`, color: net.color, cursor: "pointer",
+            fontFamily: "'JetBrains Mono', monospace", fontSize: 10, fontWeight: 600,
+          }}
+        >
+          🏖 idle API resale
+        </button>
+        <button
+          type="button"
+          onClick={() => applyDemoPreset("article")}
+          style={{
+            padding: "6px 10px", borderRadius: 5, border: "1px solid #2a2a2a",
+            background: "#111", color: "#888", cursor: "pointer",
+            fontFamily: "'JetBrains Mono', monospace", fontSize: 10, fontWeight: 600,
+          }}
+        >
+          📰 pay per article
+        </button>
+        <span style={{ fontSize: 9, color: "#333", flex: "1 1 180px", minWidth: 0, lineHeight: 1.4 }}>
+          Proxy mode: AgentGate assigns you a <code style={{ color: "#555" }}>/api/proxy/&lt;id&gt;</code> URL and forwards paid requests to your backend with injected auth headers.
+        </span>
+      </div>
+
+      {/* ── Mode selector ───────────────────────────────────────────────────── */}
+      <div style={{ display: "flex", gap: 8 }}>
+        {[
+          { on: true,  label: "🔀 AgentGate Proxy", sub: "I'll provide a backend API key" },
+          { on: false, label: "🔗 My Own Endpoint",  sub: "I have an x402-ready URL" },
+        ].map(({ on, label, sub }) => (
+          <button
+            key={String(on)}
+            type="button"
+            onClick={() => { setProxyEnabled(on); setTestResult(null); setPublishResult(null); setPublishError(null); }}
             style={{
-              padding: "9px 16px", fontFamily: "'JetBrains Mono', monospace", fontSize: 11,
-              borderRadius: 6, cursor: testing || !url.trim() ? "default" : "pointer",
-              background: testing ? "#111" : `${net.color}22`,
-              border: `1px solid ${testing ? "#333" : net.color}`,
-              color: testing ? "#555" : net.color,
-              whiteSpace: "nowrap", transition: "all 0.2s", flexShrink: 0,
+              flex: 1, padding: "10px 12px", borderRadius: 7, cursor: "pointer", textAlign: "left",
+              border: `1px solid ${proxyEnabled === on ? net.color : "#252525"}`,
+              background: proxyEnabled === on ? `${net.color}14` : "#080808",
+              transition: "all 0.18s",
             }}
           >
-            {testing ? "testing…" : "▶ test"}
+            <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, fontWeight: 700,
+              color: proxyEnabled === on ? net.color : "#555" }}>{label}</div>
+            <div style={{ fontSize: 10, color: proxyEnabled === on ? `${net.color}99` : "#333", marginTop: 3 }}>{sub}</div>
           </button>
+        ))}
+      </div>
+
+      {/* ── Proxy: backend URL + headers ────────────────────────────────────── */}
+      {proxyEnabled && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12,
+          padding: "14px 16px", borderRadius: 8, background: "#080808", border: "1px solid #1e1e1e" }}>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+            <span style={{ fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+              Backend URL <span style={{ color: "#444", textTransform: "none", letterSpacing: 0 }}>(OpenAI, Anthropic, your API…)</span>
+            </span>
+            <input
+              type="url"
+              placeholder="https://api.openai.com/v1/chat/completions"
+              value={backendUrl}
+              onChange={(e) => setBackendUrl(e.target.value)}
+              style={inputStyle}
+            />
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <span style={{ fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                Auth Headers <span style={{ color: "#444", textTransform: "none", letterSpacing: 0 }}>(injected server-side, never exposed to agents)</span>
+              </span>
+              <button
+                onClick={() => setHeaderRows((r) => [...r, { key: "", val: "" }])}
+                style={{ background: "none", border: "1px solid #252525", color: "#555", fontSize: 10, padding: "2px 8px", borderRadius: 4, cursor: "pointer" }}
+              >
+                + add
+              </button>
+            </div>
+            {headerRows.map((row, i) => (
+              <div key={i} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <input
+                  placeholder="Authorization"
+                  value={row.key}
+                  onChange={(e) => setHeaderRows((r) => r.map((x, j) => j === i ? { ...x, key: e.target.value } : x))}
+                  style={{ ...inputStyle, width: "35%", fontSize: 11 }}
+                />
+                <span style={{ color: "#333", fontSize: 12 }}>:</span>
+                <input
+                  placeholder="Bearer sk-..."
+                  value={row.val}
+                  onChange={(e) => setHeaderRows((r) => r.map((x, j) => j === i ? { ...x, val: e.target.value } : x))}
+                  style={{ ...inputStyle, flex: 1, fontSize: 11 }}
+                />
+                {headerRows.length > 1 && (
+                  <button
+                    onClick={() => setHeaderRows((r) => r.filter((_, j) => j !== i))}
+                    style={{ background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 14 }}
+                  >×</button>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {/* Auto-generated on-chain URL */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+            <span style={{ fontSize: 10, color: "#444", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+              Your AgentGate URL <span style={{ color: "#333", textTransform: "none", letterSpacing: 0 }}>(auto-assigned, registered on-chain)</span>
+            </span>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <input ref={urlRef} type="url" value={url}
+                onChange={(e) => { setUrl(e.target.value); setTestResult(null); }}
+                placeholder={`${publicAgentGateBase()}/api/proxy/…`}
+                style={{ ...inputStyle, flex: 1, color: "#4ade80", fontSize: 11 }} />
+              <button
+                onClick={handleTest}
+                disabled={testing}
+                style={{
+                  padding: "9px 14px", fontFamily: "'JetBrains Mono', monospace", fontSize: 11,
+                  borderRadius: 6, cursor: testing ? "default" : "pointer",
+                  background: testing ? "#111" : `${net.color}22`,
+                  border: `1px solid ${testing ? "#333" : net.color}`,
+                  color: testing ? "#555" : net.color,
+                  whiteSpace: "nowrap", transition: "all 0.2s", flexShrink: 0,
+                }}
+              >
+                {testing ? "testing…" : "▶ test server"}
+              </button>
+            </div>
+          </div>
         </div>
-      </Field>
+      )}
+
+      {/* ── Direct mode: URL input ───────────────────────────────────────────── */}
+      {!proxyEnabled && (
+        <Field label="Endpoint URL (on-chain)" hint="— must return 200 or 402">
+          <div style={{ display: "flex", gap: 8 }}>
+            <input ref={urlRef} type="url" placeholder="https://api.yourservice.com/endpoint"
+              value={url} onChange={(e) => { setUrl(e.target.value); setTestResult(null); }}
+              onKeyDown={(e) => e.key === "Enter" && handleTest()}
+              style={{ ...inputStyle, flex: 1 }} />
+            <button
+              onClick={handleTest}
+              disabled={testing || !url.trim()}
+              style={{
+                padding: "9px 16px", fontFamily: "'JetBrains Mono', monospace", fontSize: 11,
+                borderRadius: 6, cursor: testing || !url.trim() ? "default" : "pointer",
+                background: testing ? "#111" : `${net.color}22`,
+                border: `1px solid ${testing ? "#333" : net.color}`,
+                color: testing ? "#555" : net.color,
+                whiteSpace: "nowrap", transition: "all 0.2s", flexShrink: 0,
+              }}
+            >
+              {testing ? "testing…" : "▶ test"}
+            </button>
+          </div>
+        </Field>
+      )}
 
       {/* ── Test Result ─────────────────────────────────────────────────────── */}
       {testResult && (
@@ -390,15 +691,15 @@ export function PublishForm({ networkId }: { networkId: NetworkId }) {
       )}
 
       {/* ── Price ───────────────────────────────────────────────────────────── */}
-      <Field label="Price per Call" hint="— in USDC">
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <Field label="Price per Call" hint="— quoted in USD; agents pay native HBAR (Mirror rate)">
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <span style={{ fontSize: 14, color: "#555", paddingLeft: 4 }}>$</span>
           <input type="number" min="0" step="0.001" value={price}
             onChange={(e) => setPrice(e.target.value)}
             style={{ ...inputStyle, width: 120 }} />
-          <span style={{ fontSize: 12, color: "#555" }}>USDC</span>
+          <span style={{ fontSize: 12, color: "#555" }}>USD</span>
           <span style={{ fontSize: 10, color: "#333", marginLeft: 4 }}>
-            = {Math.round(parseFloat(price || "0") * 1_000_000).toLocaleString()} units
+            = {registryUnits.toLocaleString()} registry units (6 decimals)
           </span>
         </div>
       </Field>
@@ -473,87 +774,6 @@ export function PublishForm({ networkId }: { networkId: NetworkId }) {
         <span style={{ fontSize: 9, color: "#4ade80" }}>staked ✓</span>
       </div>
 
-      {/* ── Proxy Mode ──────────────────────────────────────────────────────── */}
-      <div>
-        <button
-          onClick={() => { setProxyEnabled((v) => !v); setProxyDone(null); setProxyError(null); }}
-          style={{
-            width: "100%", padding: "9px 0",
-            fontFamily: "'JetBrains Mono', monospace", fontSize: 11, fontWeight: 700,
-            borderRadius: 6, cursor: "pointer",
-            border: `1px solid ${proxyEnabled ? net.color : "#252525"}`,
-            background: proxyEnabled ? `${net.color}15` : "#0a0a0a",
-            color: proxyEnabled ? net.color : "#555", transition: "all 0.2s",
-          }}
-        >
-          {proxyEnabled ? "▲ hide proxy config" : "🔀 proxy mode — forward requests to any upstream API"}
-        </button>
-
-        {proxyEnabled && (
-          <div style={{
-            marginTop: 8, padding: "14px 16px", borderRadius: 8,
-            background: "#080808", border: "1px solid #1e1e1e",
-            display: "flex", flexDirection: "column", gap: 12,
-          }}>
-            <div style={{ fontSize: 11, color: "#555", lineHeight: 1.6 }}>
-              Paid requests are forwarded to your backend. Your API key is injected server-side and never exposed to agents.
-            </div>
-
-            <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-              <span style={{ fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: "0.08em" }}>
-                Backend URL
-              </span>
-              <input
-                type="url"
-                placeholder="https://api.anthropic.com/v1/messages"
-                value={backendUrl}
-                onChange={(e) => setBackendUrl(e.target.value)}
-                style={inputStyle}
-              />
-            </div>
-
-            <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <span style={{ fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: "0.08em" }}>
-                  Auth Headers <span style={{ color: "#444", textTransform: "none", letterSpacing: 0 }}>(e.g. your Claude / Gemini key)</span>
-                </span>
-                <button
-                  onClick={() => setHeaderRows((r) => [...r, { key: "", val: "" }])}
-                  style={{ background: "none", border: "1px solid #252525", color: "#555", fontSize: 10, padding: "2px 8px", borderRadius: 4, cursor: "pointer" }}
-                >
-                  + add
-                </button>
-              </div>
-              {headerRows.map((row, i) => (
-                <div key={i} style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                  <input
-                    placeholder="x-api-key"
-                    value={row.key}
-                    onChange={(e) => setHeaderRows((r) => r.map((x, j) => j === i ? { ...x, key: e.target.value } : x))}
-                    style={{ ...inputStyle, width: "35%", fontSize: 11 }}
-                  />
-                  <span style={{ color: "#333", fontSize: 12 }}>:</span>
-                  <input
-                    placeholder="sk-ant-api03-..."
-                    value={row.val}
-                    onChange={(e) => setHeaderRows((r) => r.map((x, j) => j === i ? { ...x, val: e.target.value } : x))}
-                    style={{ ...inputStyle, flex: 1, fontSize: 11 }}
-                  />
-                  {headerRows.length > 1 && (
-                    <button
-                      onClick={() => setHeaderRows((r) => r.filter((_, j) => j !== i))}
-                      style={{ background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 14 }}
-                    >×</button>
-                  )}
-                </div>
-              ))}
-              <div style={{ fontSize: 10, color: "#333" }}>
-                Keys are stored server-side only and never returned in API responses.
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
 
       {/* ── Wallet + Publish ─────────────────────────────────────────────────── */}
       <div style={{ display: "flex", flexDirection: "column", gap: 10, paddingTop: 4 }}>
@@ -602,10 +822,10 @@ export function PublishForm({ networkId }: { networkId: NetworkId }) {
             : wrongNetwork
             ? `switch to ${NETWORKS[selectedNet].label}`
             : proxyEnabled && backendUrl.trim()
-            ? parseFloat(gasDeposit) > 0
+            ? hasDeposit
               ? `publish + fund ${gasDeposit} ${net.currency} + activate proxy →`
               : "publish + activate proxy →"
-            : parseFloat(gasDeposit) > 0
+            : hasDeposit
             ? `publish + fund ${gasDeposit} ${net.currency} gas budget →`
             : "publish on-chain →"
           }
@@ -634,7 +854,7 @@ export function PublishForm({ networkId }: { networkId: NetworkId }) {
               {[
                 ["Network",   NETWORKS[publishResult.networkId].label],
                 ["URL",       url],
-                ["Price",     "$" + price + " USDC"],
+                ["Price",     "$" + price + " USD (settled in HBAR)"],
                 ["Paymaster", paymasterAddress.slice(0, 14) + "…"],
                 ["Reg tx",    publishResult.txHash],
               ].map(([k, v]) => (

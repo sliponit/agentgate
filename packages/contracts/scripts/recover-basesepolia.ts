@@ -44,7 +44,7 @@ async function main() {
 
   // ── 1. Register weather endpoint ─────────────────────────────────────────
   const weatherUrl   = "https://agentgate.demo/api/weather";
-  const pricePerCall = 10000n; // $0.01 USDC
+  const pricePerCall = 10000n; // $0.01 USD (6 decimals)
 
   console.log("🌐 [1/2] Registering weather endpoint...");
   let registerTxHash = "skipped";

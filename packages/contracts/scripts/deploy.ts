@@ -81,7 +81,7 @@ async function main() {
   // ── 3. Register weather endpoint on-chain ────────────────────────────────
   console.log("\n🌐 [3/4] Registering weather endpoint on-chain...");
   const weatherUrl = "https://agentgate.demo/api/weather";
-  const pricePerCall = 10000n; // $0.01 USDC
+  const pricePerCall = 10000n; // $0.01 USD (6 decimals)
 
   const registerTx = await (registry as any).registerEndpoint(
     weatherUrl,
@@ -93,7 +93,7 @@ async function main() {
 
   console.log(`✅ Endpoint registered`);
   console.log(`   URL:   ${weatherUrl}`);
-  console.log(`   Price: $0.01 USDC | Paymaster: ${paymasterAddress}`);
+  console.log(`   Price: $0.01 USD (HBAR at settlement) | Paymaster: ${paymasterAddress}`);
   console.log(`   Tx:  ${registerTxHash}`);
   console.log(`   🔗  ${explorerTx(networkName, registerTxHash)}`);
 

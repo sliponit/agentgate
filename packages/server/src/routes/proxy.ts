@@ -54,7 +54,7 @@ const facilitator = new HederaFacilitatorClient();
 const router = new Hono();
 
 // ── GET or POST /api/proxy/:endpointId[/*] ─────────────────────────────────
-router.all("/:endpointId{[0-9]+}/*?", async (c) => {
+router.all("/:endpointId/*", async (c) => {
   const endpointId = parseInt(c.req.param("endpointId"), 10);
   if (isNaN(endpointId)) {
     return c.json({ error: "Invalid endpoint ID" }, 400);
@@ -67,7 +67,7 @@ router.all("/:endpointId{[0-9]+}/*?", async (c) => {
   }
 
   // 2. Read endpoint from chain to get price + publisher address
-  let priceUsdc = 0.01; // fallback
+  let priceUsd = 0.01; // fallback (registry stores USD, 6 decimals)
   let payTo     = PAYTO;
   try {
     const client = createPublicClient({ chain: hederaChain, transport: http(HEDERA_RPC) });
@@ -77,7 +77,7 @@ router.all("/:endpointId{[0-9]+}/*?", async (c) => {
     }) as readonly [bigint, `0x${string}`, string, bigint, `0x${string}`, boolean, bigint, bigint, bigint];
 
     if (!ep[5]) return c.json({ error: "Endpoint is inactive" }, 403);
-    priceUsdc = Number(ep[3]) / 1_000_000;
+    priceUsd = Number(ep[3]) / 1_000_000;
     payTo     = ep[1]; // publisher address is the recipient
   } catch (err: any) {
     console.warn(`[proxy] Could not read endpoint #${endpointId} from chain:`, err.message);
@@ -88,7 +88,7 @@ router.all("/:endpointId{[0-9]+}/*?", async (c) => {
 
   if (!paymentHeader) {
     // Return a proper 402 challenge
-    const amount  = await usdToTinybars(priceUsdc);
+    const amount  = await usdToTinybars(priceUsd);
     const accepts = [{
       scheme:  "exact",
       network: "eip155:296",
@@ -112,7 +112,7 @@ router.all("/:endpointId{[0-9]+}/*?", async (c) => {
     return c.json({ error: "Invalid PAYMENT-SIGNATURE header (not base64 JSON)" }, 400);
   }
 
-  const amount         = await usdToTinybars(priceUsdc);
+  const amount         = await usdToTinybars(priceUsd);
   const requirements   = { scheme: "exact", network: "eip155:296", payTo, amount: amount.toString(), asset: "hbar" };
   const verifyResult   = await facilitator.verify(paymentPayload, requirements);
 
@@ -121,7 +121,7 @@ router.all("/:endpointId{[0-9]+}/*?", async (c) => {
     return c.json({ error: `Payment invalid: ${verifyResult.invalidReason}` }, 402);
   }
 
-  console.log(`[proxy] ✅ Payment verified for endpoint #${endpointId} ($${priceUsdc} → ${amount} tinybars)`);
+  console.log(`[proxy] ✅ Payment verified for endpoint #${endpointId} ($${priceUsd} USD → ${amount} tinybars HBAR)`);
 
   // 5. Forward to upstream backend
   const method      = c.req.method;

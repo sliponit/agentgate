@@ -99,16 +99,48 @@ export function useWallet() {
       const walletClient = createWalletClient({ chain, transport: custom(window.ethereum) });
       const publicClient = createPublicClient({ chain, transport: http(NETWORKS[networkId].rpc) });
 
-      const { request } = await publicClient.simulateContract({
-        address: contractAddr,
-        abi,
-        functionName,
-        args,
-        account: state.address,
-        ...(value !== undefined ? { value } : {}),
-      });
+      // Hedera JSON-RPC rejects eth_estimateGas if gas price is below the network minimum
+      // (MetaMask surfaces that as "Missing or invalid parameters").
+      const HEDERA_MIN_GAS_WEI = 1_300_000_000_000n; // 1300 Gwei — above typical 1020+ Gwei floor
+      let gasPrice: bigint | undefined;
+      if (networkId === "hedera") {
+        try {
+          const gp = await publicClient.getGasPrice();
+          gasPrice = gp < HEDERA_MIN_GAS_WEI ? HEDERA_MIN_GAS_WEI : gp;
+        } catch {
+          gasPrice = HEDERA_MIN_GAS_WEI;
+        }
+      }
 
-      const hash = await walletClient.writeContract(request);
+      // Hedera JSON-RPC rejects gasPrice in eth_call (simulateContract) and also rejects
+      // eth_estimateGas outright ("Missing or invalid parameters"). We must skip simulation
+      // and provide an explicit gas limit so MetaMask never calls eth_estimateGas.
+      const HEDERA_GAS_LIMIT = 500_000n;
+
+      let hash: `0x${string}`;
+      if (networkId === "hedera") {
+        hash = await walletClient.writeContract({
+          address: contractAddr,
+          abi,
+          functionName,
+          args,
+          account: state.address,
+          chain: hederaTestnet,
+          gas: HEDERA_GAS_LIMIT,
+          gasPrice,
+          ...(value !== undefined ? { value } : {}),
+        } as any);
+      } else {
+        const { request } = await publicClient.simulateContract({
+          address: contractAddr,
+          abi,
+          functionName,
+          args,
+          account: state.address,
+          ...(value !== undefined ? { value } : {}),
+        });
+        hash = await walletClient.writeContract({ ...request });
+      }
       return hash;
     },
     [state.address]
