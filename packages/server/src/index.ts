@@ -13,6 +13,9 @@ import {
   createAgentkitHooks,
   declareAgentkitExtension,
   InMemoryAgentKitStorage,
+  parseAgentkitHeader,
+  validateAgentkitMessage,
+  verifyAgentkitSignature,
 } from "@worldcoin/agentkit";
 
 import { config, HEDERA } from "./config";
@@ -94,12 +97,77 @@ const routes = {
   },
 };
 
+// ── WorldID gate middleware ────────────────────────────────────────────────────
+// Hard requirement: only agents delegated by a real human (World Chain AgentBook)
+// may access protected routes. Agents without WorldID get 403, not a payment fallback.
+//
+// Flow:
+//   no agentkit header + no payment attempt → let x402 issue the 402 challenge
+//     (the challenge includes the agentkit extension so the agent knows what's needed)
+//   no agentkit header + payment header present → 403 (paying without WorldID is rejected)
+//   agentkit header present but invalid/not in AgentBook → 403
+//   agentkit valid + in AgentBook → continue to x402 (free-trial or HBAR payment)
+
+async function requireWorldId(c: any, next: () => Promise<void>) {
+  const agentkitHeader = c.req.header("agentkit") ?? c.req.header("AGENTKIT");
+
+  if (!agentkitHeader) {
+    // Check whether the agent is already trying to pay (without providing WorldID proof)
+    const hasPayment =
+      c.req.header("x-payment") ??
+      c.req.header("X-PAYMENT") ??
+      c.req.header("payment-signature") ??
+      c.req.header("PAYMENT-SIGNATURE");
+
+    if (hasPayment) {
+      return c.json(
+        { error: "WorldID proof required. Include a valid `agentkit` header — HBAR payment alone is not accepted on this endpoint." },
+        403
+      );
+    }
+
+    // No proof and no payment → let x402 fire the 402 challenge (which includes the agentkit extension)
+    return next();
+  }
+
+  try {
+    const payload    = parseAgentkitHeader(agentkitHeader);
+    const validation = await validateAgentkitMessage(payload, c.req.url);
+    if (!validation.valid) {
+      return c.json({ error: `Invalid AgentKit proof: ${validation.error}` }, 403);
+    }
+
+    const verification = await verifyAgentkitSignature(payload);
+    if (!verification.valid || !verification.address) {
+      return c.json({ error: `AgentKit signature invalid: ${verification.error}` }, 403);
+    }
+
+    const humanId = await agentBook.lookupHuman(verification.address, payload.chainId);
+    if (!humanId) {
+      console.log(`[WorldID gate] ✗ ${verification.address} not in AgentBook → 403`);
+      return c.json(
+        { error: `Agent ${verification.address} is not registered in the World Chain AgentBook. Register your agent at worldcoin.org to access this endpoint.` },
+        403
+      );
+    }
+
+    console.log(`[WorldID gate] ✓ ${verification.address} verified (humanId: ${humanId.slice(0, 10)}…)`);
+    return next();
+  } catch (e: any) {
+    return c.json({ error: `AgentKit verification error: ${e.message}` }, 403);
+  }
+}
+
 // ── Hono app ──────────────────────────────────────────────────────────────────
 const app = new Hono();
 
 // Proxy routes — mounted BEFORE x402 middleware; handle their own 402 flow
 // so each endpoint can have its own dynamic price from the on-chain registry.
 app.route("/api/proxy", proxyRouter);
+
+// WorldID gate — applied to all protected routes before x402 sees the request
+app.use("/api/weather/*", requireWorldId);
+app.use("/api/prices/*",  requireWorldId);
 
 // Payment middleware (handles 402 challenge/response)
 const httpServer = new x402HTTPResourceServer(resourceServer, routes).onProtectedRequest(
@@ -151,7 +219,9 @@ serve(
     console.log(`   GET  /health`);
     console.log(`   POST /api/publisher/proxy-config   — register proxy (wallet-signed)`);
     console.log(`   GET  /api/publisher/proxy-config/:id`);
-    console.log(`\n🆔 AgentKit: free-trial mode (3 uses), World Chain AgentBook`);
+    console.log(`\n🆔 WorldID gate: REQUIRED on /api/weather + /api/prices (AgentBook, World Chain)`);
+    console.log(`   Verified agents → 3 free calls (free-trial), then HBAR payment`);
+    console.log(`   Unverified agents → 403 (HBAR payment alone not accepted)`);
     console.log(`💳 Payments to: ${payTo}\n`);
   }
 );
