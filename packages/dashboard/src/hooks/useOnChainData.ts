@@ -102,17 +102,20 @@ export function useOnChainData(networkId: NetworkId) {
           if (ep[2]) { // skip empty slots (url would be empty string)
             const epId = Number(ep[0]);
             // Fetch proxy config from server (name + requireWorldId)
+            // Skip on Vercel if no server URL configured — avoids hanging fetch to localhost
             let proxyName: string | undefined;
             let requireWorldId: boolean | undefined;
-            try {
-              const SERVER = import.meta.env.VITE_SERVER_URL || "http://localhost:4021";
-              const pcRes = await globalThis.fetch(`${SERVER}/api/publisher/proxy-config/${epId}`);
-              if (pcRes.ok) {
-                const pc = await pcRes.json() as any;
-                proxyName = pc.name;
-                requireWorldId = pc.requireWorldId;
-              }
-            } catch { /* server may be down */ }
+            const SERVER = import.meta.env.VITE_SERVER_URL;
+            if (SERVER) {
+              try {
+                const pcRes = await globalThis.fetch(`${SERVER}/api/publisher/proxy-config/${epId}`, { signal: AbortSignal.timeout(3000) });
+                if (pcRes.ok) {
+                  const pc = await pcRes.json() as any;
+                  proxyName = pc.name;
+                  requireWorldId = pc.requireWorldId;
+                }
+              } catch { /* server may be down */ }
+            }
             endpoints.push({
               id: epId,
               publisher: ep[1],
