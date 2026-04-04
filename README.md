@@ -14,7 +14,7 @@ The system supports two agent archetypes: human-backed agents that authenticate 
 
 Publishers register endpoints on-chain via the PublisherRegistry contract (storing URL, USD price, paymaster address), then configure server-side proxy settings (backend URL, injected API keys, WorldID requirements) via EIP-191 signed messages. The proxy system means publishers can monetize any existing API — agents never see the real backend URL or API keys.
 
-The AgentGatePaymaster (ERC-4337 v0.7) lets publishers deposit ETH and set a gas-share percentage per endpoint. When agents submit UserOps, the paymaster reads the endpoint hash from paymasterAndData[52:84], reserves the publisher's share of max gas cost, then refunds the overage in post-op settlement. This creates market competition: endpoints with higher gas sponsorship attract more agent traffic.
+The AgentGatePaymaster (ERC-4337) lets publishers deposit ETH and set a gas-share percentage per endpoint. When agents submit UserOps, the paymaster reads the endpoint hash from paymasterAndData, reserves the publisher's share of max gas cost, then refunds the overage in post-op settlement. This creates market competition: endpoints with higher gas sponsorship attract more agent traffic.
 
 ## How it's made
 
@@ -24,10 +24,10 @@ The server (TypeScript/Hono) implements an order-sensitive middleware chain. Pro
 
 WorldCoin AgentKit integration uses @anthropic-ai/agentkit for SIWE challenge generation and @anthropic-ai/agentkit/server for verification. The server queries World Chain's AgentBook contract to check if an agent address was delegated by a WorldID-verified human. Verified agents get 3 free calls tracked in InMemoryAgentKitStorage (keyed by address:endpointId).
 
-The contracts are particularly noteworthy. The AgentGatePaymaster implements ERC-4337 v0.7's BasePaymaster with a per-endpoint gas budget model. Each endpoint gets its own balance and gasShareBps (0-10000). We had to distinguish "unset" from "0%" using a separate endpointGasShareIsSet mapping — unset defaults to 100%, while explicitly-set-to-0% means "I sponsor nothing." The paymaster uses try/catch around entryPoint.depositTo() so the same contract works on both Hedera (where EntryPoint behavior differs) and Base Sepolia.
+The contracts are particularly noteworthy. The AgentGatePaymaster implements ERC-4337 BasePaymaster with a per-endpoint gas budget model. Each endpoint gets its own balance and gasShareBps (0-10000). We had to distinguish "unset" from "0%" using a separate endpointGasShareIsSet mapping — unset defaults to 100%, while explicitly-set-to-0% means "I sponsor nothing." The paymaster uses try/catch around entryPoint.depositTo() so the same contract works on both Hedera (where EntryPoint behavior differs) and Base Sepolia.
 
 The publisher proxy system is where it gets hacky in a good way. Publishers sign their proxy configuration (backend URL, injected headers, WorldID requirement) with EIP-191 messages. The server recovers the signer address, checks it matches the on-chain endpoint owner, and stores the config. API keys are injected server-side into upstream requests — agents never see them. This means any existing API can be monetized without modification.
 
 The dashboard (React 18 + Vite 5 + Tailwind) polls on-chain state every 12 seconds via viem's readContract, showing live gas balances, call counts, and sponsored amounts. The publish flow is two-phase: first an on-chain tx to register the endpoint + fund the paymaster, then a signed POST to configure the proxy server-side.
 
-Partner tech used: Hedera Testnet (chain + Mirror Node for payment verification + exchange rates), WorldCoin AgentKit (human verification + free-trial), ERC-4337 v0.7 with Pimlico bundler (account abstraction), viem/wagmi (EVM interactions).
+Partner tech used: Hedera Testnet (chain + Mirror Node for payment verification + exchange rates), WorldCoin AgentKit (human verification + free-trial)
