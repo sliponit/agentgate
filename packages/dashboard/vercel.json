@@ -1,6 +1,6 @@
 {
   "rewrites": [
-    { "source": "/api/hedera-rpc", "destination": "/api/hedera-rpc" },
+    { "source": "/api/hedera-rpc", "destination": "https://testnet.hashio.io/api" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]
 }
