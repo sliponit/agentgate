@@ -38,8 +38,19 @@ export const REGISTRY_ABI = [
       { name: "totalCalls", type: "uint256" },
       { name: "totalRevenue", type: "uint256" },
       { name: "registeredAt", type: "uint256" },
+      { name: "requireWorldId", type: "bool" },
     ],
     stateMutability: "view",
+  },
+  {
+    name: "setRequireWorldId",
+    type: "function",
+    inputs: [
+      { name: "endpointId", type: "uint256" },
+      { name: "required", type: "bool" },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
   },
 ] as const;
 

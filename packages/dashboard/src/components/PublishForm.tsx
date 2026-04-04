@@ -339,6 +339,22 @@ export function PublishForm({
 
       setPublishResult({ txHash: regHash, networkId: selectedNet, endpointId });
 
+      // Set WorldID requirement on-chain (if enabled)
+      if (requireWorldId) {
+        try {
+          setPublishStep("Setting WorldID requirement on-chain…");
+          await wallet.writeContract(
+            selectedNet,
+            DEPLOYMENTS[selectedNet].publisherRegistry,
+            [{ name: "setRequireWorldId", type: "function", inputs: [{ name: "endpointId", type: "uint256" }, { name: "required", type: "bool" }], outputs: [], stateMutability: "nonpayable" }] as any,
+            "setRequireWorldId",
+            [BigInt(endpointId), true]
+          );
+        } catch (e: any) {
+          console.warn("setRequireWorldId failed:", e.message);
+        }
+      }
+
       const gasNum = parseDecimalInput(gasDeposit);
       const totalSteps = (Number.isFinite(gasNum) && gasNum > 0 ? 1 : 0) + (proxyEnabled && backendUrl.trim() ? 1 : 0) + 1;
       let step = 1;

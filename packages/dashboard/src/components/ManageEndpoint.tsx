@@ -181,7 +181,7 @@ export function ManageEndpoint(_props: { networkId: NetworkId }) {
           abi: REGISTRY_ABI,
           functionName: "endpoints",
           args: [id],
-        }) as readonly [bigint, `0x${string}`, string, bigint, `0x${string}`, boolean, bigint, bigint, bigint];
+        }) as readonly [bigint, `0x${string}`, string, bigint, `0x${string}`, boolean, bigint, bigint, bigint, boolean];
 
         // Also read paymaster gas budget + share for this URL
         let gasBudget = 0n;

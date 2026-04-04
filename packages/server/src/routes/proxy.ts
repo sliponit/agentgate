@@ -21,7 +21,7 @@ import { validateAgentKitHeader } from "../services/agentkit";
 import { config } from "../config";
 
 const HEDERA_RPC  = process.env.HEDERA_TESTNET_RPC || "https://testnet.hashio.io/api";
-const REGISTRY    = (process.env.PUBLISHER_REGISTRY || "0xFBCee3E39A0909549fbc28cac37141d01f946189") as `0x${string}`;
+const REGISTRY    = (process.env.PUBLISHER_REGISTRY || "0x33eb7BBCde3AD7851d331A946B666e2B257A5760") as `0x${string}`;
 const PAYTO       = config.publisherAddress as `0x${string}`;
 
 const hederaChain = defineChain({
@@ -45,6 +45,7 @@ const REGISTRY_ABI = [
       { name: "totalCalls",   type: "uint256" },
       { name: "totalRevenue", type: "uint256" },
       { name: "registeredAt", type: "uint256" },
+      { name: "requireWorldId", type: "bool" },
     ],
     stateMutability: "view",
   },
@@ -105,19 +106,24 @@ router.all("/:endpointId/*", async (c) => {
   // 2. Read endpoint from chain to get price + publisher address
   let priceUsd = 0.01; // fallback (registry stores USD, 6 decimals)
   let payTo     = PAYTO;
+  let onChainRequireWorldId = false;
   try {
     const client = createPublicClient({ chain: hederaChain, transport: http(HEDERA_RPC) });
     const ep = await client.readContract({
       address: REGISTRY, abi: REGISTRY_ABI,
       functionName: "endpoints", args: [BigInt(endpointId)],
-    }) as readonly [bigint, `0x${string}`, string, bigint, `0x${string}`, boolean, bigint, bigint, bigint];
+    }) as readonly [bigint, `0x${string}`, string, bigint, `0x${string}`, boolean, bigint, bigint, bigint, boolean];
 
     if (!ep[5]) return c.json({ error: "Endpoint is inactive" }, 403);
     priceUsd = Number(ep[3]) / 1_000_000;
-    payTo     = ep[1]; // publisher address is the recipient
+    payTo     = ep[1];
+    onChainRequireWorldId = ep[9]; // requireWorldId from contract
   } catch (err: any) {
     console.warn(`[proxy] Could not read endpoint #${endpointId} from chain:`, err.message);
   }
+
+  // Use on-chain requireWorldId (falls back to proxyStore config)
+  const requireWorldId = onChainRequireWorldId || proxyConfig.requireWorldId;
 
   // 3. WorldID free-trial check (before payment)
   // If publisher requires WorldID and agent provides a valid proof with AgentBook membership,
@@ -147,14 +153,14 @@ router.all("/:endpointId/*", async (c) => {
       console.log(`[proxy] AgentKit valid but not in AgentBook: ${akResult.address} — no free-trial`);
     } else {
       // Invalid agentkit header — if WorldID is required, reject immediately
-      if (proxyConfig.requireWorldId) {
+      if (requireWorldId) {
         return c.json({ error: `WorldID verification failed: ${akResult.error}`, requireWorldId: true }, 403);
       }
     }
   }
 
   // If WorldID is required but no valid proof provided, reject before payment
-  if (proxyConfig.requireWorldId && !worldIdVerified) {
+  if (requireWorldId && !worldIdVerified) {
     const amount = await usdToTinybars(priceUsd);
     const paymentRequired: any = {
       x402Version: 1,
@@ -184,7 +190,7 @@ router.all("/:endpointId/*", async (c) => {
       extra:   { name: "HBAR", decimals: 8, assetTransferMethod: "hedera-native" },
     }];
     const paymentRequired: any = { x402Version: 1, accepts, endpointName: proxyConfig.name };
-    if (proxyConfig.requireWorldId) {
+    if (requireWorldId) {
       paymentRequired.requireWorldId = true;
       paymentRequired.freeTrialInfo = "WorldID-verified agents get 3 free calls. Include `agentkit` header for free-trial.";
     }

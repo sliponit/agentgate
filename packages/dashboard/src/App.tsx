@@ -126,8 +126,8 @@ export default function App() {
             <div className="sidebar-block">
               <div className="sidebar-label">Contracts on {net.label}</div>
               {([
-                ["PublisherRegistry", "0xFBCee3E39A0909549fbc28cac37141d01f946189"],
-                ["AgentGatePaymaster", "0xfbC79b8d8b7659ce21DD37b82f988b9134c262a1"],
+                ["PublisherRegistry", "0x33eb7BBCde3AD7851d331A946B666e2B257A5760"],
+                ["AgentGatePaymaster", "0x905C8365aC5d7059C0aa2f2007278C21A7192C1C"],
                 ["EntryPoint v0.7", "0x0000000071727De22E5E9d8BAf0edAc6f37da032"],
               ] as const).map(([label, addr]) => (
                 <div key={label} className="sidebar-row">

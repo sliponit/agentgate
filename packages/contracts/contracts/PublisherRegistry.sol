@@ -19,6 +19,7 @@ contract PublisherRegistry is Ownable {
         uint256 totalCalls;
         uint256 totalRevenue;
         uint256 createdAt;
+        bool requireWorldId; // if true, only WorldID-verified agents can access
     }
 
     uint256 public nextEndpointId;
@@ -38,6 +39,7 @@ contract PublisherRegistry is Ownable {
     );
     event EndpointDeactivated(uint256 indexed id, address indexed publisher);
     event EndpointActivated(uint256 indexed id, address indexed publisher);
+    event WorldIdRequirementSet(uint256 indexed id, bool required);
     event PaymasterUpdated(uint256 indexed id, address paymasterAddress);
     event CallRecorded(uint256 indexed id, address indexed caller, uint256 revenue);
 
@@ -75,7 +77,8 @@ contract PublisherRegistry is Ownable {
             isActive: true,
             totalCalls: 0,
             totalRevenue: 0,
-            createdAt: block.timestamp
+            createdAt: block.timestamp,
+            requireWorldId: false
         });
 
         publisherEndpoints[msg.sender].push(id);
@@ -107,6 +110,14 @@ contract PublisherRegistry is Ownable {
     function updatePaymaster(uint256 endpointId, address paymasterAddress) external onlyPublisher(endpointId) {
         endpoints[endpointId].paymasterAddress = paymasterAddress;
         emit PaymasterUpdated(endpointId, paymasterAddress);
+    }
+
+    /**
+     * @notice Set WorldID requirement for an endpoint
+     */
+    function setRequireWorldId(uint256 endpointId, bool required) external onlyPublisher(endpointId) {
+        endpoints[endpointId].requireWorldId = required;
+        emit WorldIdRequirementSet(endpointId, required);
     }
 
     /**

@@ -90,49 +90,34 @@ export function useOnChainData(networkId: NetworkId) {
       });
 
       // Fetch all registered endpoints
+      // Fetch all endpoints in parallel (much faster than sequential)
+      const epPromises = Array.from({ length: Number(nextId) }, (_, i) =>
+        client.readContract({
+          address: d.publisherRegistry,
+          abi: REGISTRY_ABI,
+          functionName: "endpoints",
+          args: [BigInt(i)],
+        }).catch(() => null)
+      );
+      const epResults = await Promise.all(epPromises);
+
       const endpoints: EndpointData[] = [];
-      for (let i = 0; i < Number(nextId); i++) {
-        try {
-          const ep = await client.readContract({
-            address: d.publisherRegistry,
-            abi: REGISTRY_ABI,
-            functionName: "endpoints",
-            args: [BigInt(i)],
-          }) as readonly [bigint, `0x${string}`, string, bigint, `0x${string}`, boolean, bigint, bigint, bigint];
-          if (ep[2]) { // skip empty slots (url would be empty string)
-            const epId = Number(ep[0]);
-            // Fetch proxy config from server (name + requireWorldId)
-            // Skip on Vercel if no server URL configured — avoids hanging fetch to localhost
-            let proxyName: string | undefined;
-            let requireWorldId: boolean | undefined;
-            const SERVER = import.meta.env.VITE_SERVER_URL;
-            if (SERVER) {
-              try {
-                const pcRes = await globalThis.fetch(`${SERVER}/api/publisher/proxy-config/${epId}`, { signal: AbortSignal.timeout(3000) });
-                if (pcRes.ok) {
-                  const pc = await pcRes.json() as any;
-                  proxyName = pc.name;
-                  requireWorldId = pc.requireWorldId;
-                }
-              } catch { /* server may be down */ }
-            }
-            endpoints.push({
-              id: epId,
-              publisher: ep[1],
-              url: ep[2],
-              pricePerCall: (Number(ep[3]) / 1_000_000).toFixed(4),
-              paymaster: ep[4],
-              active: ep[5],
-              totalCalls: Number(ep[6]),
-              totalRevenue: (Number(ep[7]) / 1_000_000).toFixed(4),
-              registeredAt: new Date(Number(ep[8]) * 1000),
-              proxyName,
-              requireWorldId,
-            });
-          }
-        } catch {
-          // endpoint slot may be empty, skip silently
-        }
+      for (const ep of epResults) {
+        if (!ep) continue;
+        const typed = ep as readonly [bigint, `0x${string}`, string, bigint, `0x${string}`, boolean, bigint, bigint, bigint, boolean];
+        if (!typed[2]) continue;
+        endpoints.push({
+          id: Number(typed[0]),
+          publisher: typed[1],
+          url: typed[2],
+          pricePerCall: (Number(typed[3]) / 1_000_000).toFixed(4),
+          paymaster: typed[4],
+          active: typed[5],
+          totalCalls: Number(typed[6]),
+          totalRevenue: (Number(typed[7]) / 1_000_000).toFixed(4),
+          registeredAt: new Date(Number(typed[8]) * 1000),
+          requireWorldId: typed[9],
+        });
       }
 
       setData({

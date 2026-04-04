@@ -4,7 +4,7 @@ import { defineChain } from "viem";
 import { proxyStore, callTracker } from "../services/proxyStore";
 
 const HEDERA_RPC  = process.env.HEDERA_TESTNET_RPC || "https://testnet.hashio.io/api";
-const REGISTRY    = (process.env.PUBLISHER_REGISTRY || "0xFBCee3E39A0909549fbc28cac37141d01f946189") as `0x${string}`;
+const REGISTRY    = (process.env.PUBLISHER_REGISTRY || "0x33eb7BBCde3AD7851d331A946B666e2B257A5760") as `0x${string}`;
 
 const hederaChain = defineChain({
   id: 296, name: "Hedera Testnet",
@@ -27,6 +27,7 @@ const REGISTRY_ABI = [
       { name: "totalCalls",   type: "uint256" },
       { name: "totalRevenue", type: "uint256" },
       { name: "registeredAt", type: "uint256" },
+      { name: "requireWorldId", type: "bool" },
     ],
     stateMutability: "view",
   },
@@ -150,7 +151,7 @@ router.post("/proxy-config", async (c) => {
     const ep = await client.readContract({
       address: REGISTRY, abi: REGISTRY_ABI,
       functionName: "endpoints", args: [BigInt(endpointId)],
-    }) as readonly [bigint, `0x${string}`, string, bigint, `0x${string}`, boolean, bigint, bigint, bigint];
+    }) as readonly [bigint, `0x${string}`, string, bigint, `0x${string}`, boolean, bigint, bigint, bigint, boolean];
 
     const onChainPublisher = ep[1].toLowerCase();
     if (onChainPublisher !== walletAddress.toLowerCase()) {

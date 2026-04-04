@@ -55,7 +55,7 @@ async function main() {
   // ── 1. Deploy PublisherRegistry ──────────────────────────────────────────
   console.log("\n📝 [1/4] Deploying PublisherRegistry...");
   const RegistryFactory = await ethers.getContractFactory("PublisherRegistry");
-  const registry = await RegistryFactory.deploy();
+  const registry = await RegistryFactory.deploy({ gasLimit: 6_000_000 });
   await registry.waitForDeployment();
 
   const registryAddress = await registry.getAddress();
@@ -68,7 +68,7 @@ async function main() {
   // ── 2. Deploy AgentGatePaymaster ─────────────────────────────────────────
   console.log("\n⛽ [2/4] Deploying AgentGatePaymaster...");
   const PaymasterFactory = await ethers.getContractFactory("AgentGatePaymaster");
-  const paymaster = await PaymasterFactory.deploy(entryPointAddr); // only IEntryPoint arg
+  const paymaster = await PaymasterFactory.deploy(entryPointAddr, { gasLimit: 6_000_000 });
   await paymaster.waitForDeployment();
 
   const paymasterAddress = await paymaster.getAddress();

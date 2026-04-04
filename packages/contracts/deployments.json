@@ -26,23 +26,21 @@
   "hedera": {
     "network": "hedera",
     "chainId": 296,
-    "deployer": "0x05a7Ae061c14847e0B70f7851d76FC10289d69b0",
-    "publisherRegistry": "0xFBCee3E39A0909549fbc28cac37141d01f946189",
-    "paymaster": "0xfbC79b8d8b7659ce21DD37b82f988b9134c262a1",
+    "deployer": "0xD6E59890E7Dbf92262b15f7Ed39b38D1b755F33a",
+    "publisherRegistry": "0x33eb7BBCde3AD7851d331A946B666e2B257A5760",
+    "paymaster": "0x905C8365aC5d7059C0aa2f2007278C21A7192C1C",
     "entryPoint": "0x0000000071727De22E5E9d8BAf0edAc6f37da032",
-    "deployTxHash": "0x062c3f7d3e16ce4c37915ca717b5a8381ef00904002d4e9a82d983625390adb0",
-    "paymasterDeployTxHash": "0xe5111f3b4c5d00affdc2b670b973aa411755366c25364943266f025e89eb84aa",
-    "registerEndpointTxHash": "0x6d1c070b819383678720b79850110a1929c1dc07456e8443bb44232cc99b5dcb",
-    "fundTxHash": "0x1455d508a03a9766f335428967d0d9d6e8367a7ec25f65dff860c23f63387d82",
+    "deployTxHash": "0x74f3c852836066b5194a11d2d4fca5ed808572e23c4a3da79776fe2fb1fe0a73",
+    "paymasterDeployTxHash": "0xd70355525d43fe7c60803196c511e4779af535dba86ce28bc150e32d0092bfe9",
+    "registerEndpointTxHash": "0xc9b78678e9a48d6b48a66b340dffcdfcf4822a8837940db05bdfe1e355689835",
+    "fundTxHash": "0xffb9bf2959306274a590216d9127bff1aa76d39d9de1847201a0511cc44029d6",
     "weatherEndpoint": "https://agentgate.demo/api/weather",
-    "deployedAt": "2026-04-04T00:29:35.704Z",
+    "deployedAt": "2026-04-04T22:56:01.280Z",
     "explorer": {
-      "publisherRegistry": "https://hashscan.io/testnet/contract/0xFBCee3E39A0909549fbc28cac37141d01f946189",
-      "paymaster": "https://hashscan.io/testnet/contract/0xfbC79b8d8b7659ce21DD37b82f988b9134c262a1",
-      "deployTx": "https://hashscan.io/testnet/tx/0x062c3f7d3e16ce4c37915ca717b5a8381ef00904002d4e9a82d983625390adb0",
-      "paymasterDeployTx": "https://hashscan.io/testnet/tx/0xe5111f3b4c5d00affdc2b670b973aa411755366c25364943266f025e89eb84aa",
-      "registerTx": "https://hashscan.io/testnet/tx/0x6d1c070b819383678720b79850110a1929c1dc07456e8443bb44232cc99b5dcb",
-      "fundTx": "https://hashscan.io/testnet/tx/0x1455d508a03a9766f335428967d0d9d6e8367a7ec25f65dff860c23f63387d82"
+      "publisherRegistry": "https://hashscan.io/testnet/contract/0x33eb7BBCde3AD7851d331A946B666e2B257A5760",
+      "paymaster": "https://hashscan.io/testnet/contract/0x905C8365aC5d7059C0aa2f2007278C21A7192C1C",
+      "deployTx": "https://hashscan.io/testnet/tx/0x74f3c852836066b5194a11d2d4fca5ed808572e23c4a3da79776fe2fb1fe0a73",
+      "registerTx": "https://hashscan.io/testnet/tx/0xc9b78678e9a48d6b48a66b340dffcdfcf4822a8837940db05bdfe1e355689835"
     }
   }
 }
