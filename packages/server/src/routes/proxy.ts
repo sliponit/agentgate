@@ -150,7 +150,10 @@ router.all("/:endpointId/*", async (c) => {
       }
       console.log(`[proxy] Free-trial exhausted for ${akResult.address} on endpoint #${endpointId} — payment required`);
     } else if (akResult.valid && !akResult.humanId) {
-      console.log(`[proxy] AgentKit valid but not in AgentBook: ${akResult.address} — no free-trial`);
+      // Valid signature but not in AgentBook — still counts as WorldID verified (just no free-trial)
+      worldIdVerified = true;
+      worldIdAddress = akResult.address;
+      console.log(`[proxy] AgentKit valid but not in AgentBook: ${akResult.address} — no free-trial, must pay`);
     } else {
       // Invalid agentkit header — if WorldID is required, reject immediately
       if (requireWorldId) {
