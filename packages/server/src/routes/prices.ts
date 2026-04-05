@@ -12,7 +12,7 @@ const PRICES: Record<string, { price: number; change24h: number; symbol: string 
   solana: { price: 172.3, change24h: 4.87, symbol: "◎" },
   hbar: { price: 0.087, change24h: 1.23, symbol: "ℏ" },
   hedera: { price: 0.087, change24h: 1.23, symbol: "ℏ" },
-  usdc: { price: 1.0, change24h: 0.01, symbol: "$" },
+  USD: { price: 1.0, change24h: 0.01, symbol: "$" },
 };
 
 router.get("/:token", (c) => {

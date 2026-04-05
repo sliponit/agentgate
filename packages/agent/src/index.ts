@@ -4,10 +4,10 @@
  * Demonstrates the full x402 + AgentKit flow:
  * 1. Agent hits a protected endpoint → receives 402 with AgentKit challenge
  * 2. Agent signs the SIWE challenge (proves human-backing via World ID)
- * 3. Agent signs the USDC payment (EIP-3009)
+ * 3. Agent signs the USD payment (EIP-3009)
  * 4. Retries with both headers → gets 200
  *
- * Free-trial: first 3 calls pass with AgentKit proof only, no USDC needed.
+ * Free-trial: first 3 calls pass with AgentKit proof only, no USD needed.
  */
 
 import * as dotenv from "dotenv";
@@ -175,7 +175,7 @@ async function agentFetch(
   account: ReturnType<typeof privateKeyToAccount> | null,
   walletSigner: any | null,
   options?: { skipAgentKit?: boolean }
-): Promise<{ response: Response; usedFreeTrial: boolean; paidUSDC: boolean; paymentAmount?: string }> {
+): Promise<{ response: Response; usedFreeTrial: boolean; paidUSD: boolean; paymentAmount?: string }> {
   const walletOnly = options?.skipAgentKit ?? false;
 
   // ── Step 1: Initial request ────────────────────────────────────────────────
@@ -184,7 +184,7 @@ async function agentFetch(
   log.dim(`   → HTTP ${res1.status}`);
 
   if (res1.status !== 402) {
-    return { response: res1, usedFreeTrial: false, paidUSDC: false };
+    return { response: res1, usedFreeTrial: false, paidUSD: false };
   }
 
   // ── Step 2: Parse 402 ─────────────────────────────────────────────────────
@@ -196,11 +196,11 @@ async function agentFetch(
   const accepts = paymentRequired.accepts as any[];
   const chosen = accepts[0];
 
-  // Display amount correctly: HBAR tinybars (÷1e8) or USDC (÷1e6)
+  // Display amount correctly: HBAR tinybars (÷1e8) or USD (÷1e6)
   const isHbar = chosen.asset === "hbar" || chosen.network === "eip155:296";
   const displayAmount = isHbar
     ? `${(Number(chosen.amount) / 1e8).toFixed(4)} HBAR (~$${(Number(chosen.amount) / 1e8 / 11.4).toFixed(4)})`
-    : `${Number(chosen.amount) / 1e6} USDC`;
+    : `${Number(chosen.amount) / 1e6} USD`;
 
   log.dim(`   Price:   ${displayAmount}`);
   log.dim(`   Network: ${chosen.network}`);
@@ -209,7 +209,7 @@ async function agentFetch(
   if (!account) {
     log.warn("\nNo AGENT_PRIVATE_KEY set — cannot sign");
     log.warn("Set AGENT_PRIVATE_KEY in .env to enable signing");
-    return { response: res1, usedFreeTrial: false, paidUSDC: false };
+    return { response: res1, usedFreeTrial: false, paidUSD: false };
   }
 
   // ── Wallet-only path: skip AgentKit, go straight to payment ───────────────
@@ -222,13 +222,13 @@ async function agentFetch(
         log.info(`\nStep 4: Retry with HBAR payment only...`);
         const res2 = await fetch(url, { headers: { "PAYMENT-SIGNATURE": header } });
         log.dim(`   → HTTP ${res2.status}`);
-        return { response: res2, usedFreeTrial: false, paidUSDC: res2.status === 200, paymentAmount: payAmt };
+        return { response: res2, usedFreeTrial: false, paidUSD: res2.status === 200, paymentAmount: payAmt };
       }
 
       // Non-HBAR: use x402 EVM scheme
       if (!walletSigner) {
         log.error("   Cannot sign payment: no wallet signer available");
-        return { response: res1, usedFreeTrial: false, paidUSDC: false };
+        return { response: res1, usedFreeTrial: false, paidUSD: false };
       }
       const evmScheme = new ExactEvmScheme(walletSigner);
       const coreClient = new x402Client().register("eip155:*", evmScheme);
@@ -239,11 +239,11 @@ async function agentFetch(
       log.info(`\nStep 4: Retry with payment only...`);
       const res2 = await fetch(url, { headers: paymentHeaders });
       log.dim(`   → HTTP ${res2.status}`);
-      const paymentAmount = `${Number((paymentRequired.accepts as any[])[0].amount) / 1e6} USDC`;
-      return { response: res2, usedFreeTrial: false, paidUSDC: res2.status === 200, paymentAmount };
+      const paymentAmount = `${Number((paymentRequired.accepts as any[])[0].amount) / 1e6} USD`;
+      return { response: res2, usedFreeTrial: false, paidUSD: res2.status === 200, paymentAmount };
     } catch (err: any) {
       log.error(`   Payment failed: ${err.message}`);
-      return { response: res1, usedFreeTrial: false, paidUSDC: false };
+      return { response: res1, usedFreeTrial: false, paidUSD: false };
     }
   }
 
@@ -264,7 +264,7 @@ async function agentFetch(
 
   if (res2.status === 200) {
     log.success(`   ✅ Free-trial granted — no payment needed`);
-    return { response: res2, usedFreeTrial: true, paidUSDC: false };
+    return { response: res2, usedFreeTrial: true, paidUSD: false };
   }
 
   // ── Step 5: Free-trial exhausted — build x402 payment ────────────────────
@@ -289,13 +289,13 @@ async function agentFetch(
           headers: { "PAYMENT-SIGNATURE": header, agentkit: agentkitHeader2 },
         });
         log.dim(`   → HTTP ${res3.status}`);
-        return { response: res3, usedFreeTrial: false, paidUSDC: res3.status === 200, paymentAmount: payAmt };
+        return { response: res3, usedFreeTrial: false, paidUSD: res3.status === 200, paymentAmount: payAmt };
       }
 
       // Non-HBAR: use x402 EVM scheme
       if (!walletSigner) {
         log.error("   Cannot sign payment: no wallet signer available");
-        return { response: res2, usedFreeTrial: false, paidUSDC: false };
+        return { response: res2, usedFreeTrial: false, paidUSD: false };
       }
       const evmScheme = new ExactEvmScheme(walletSigner);
       const coreClient = new x402Client().register("eip155:*", evmScheme);
@@ -308,15 +308,15 @@ async function agentFetch(
         headers: { ...paymentHeaders, agentkit: agentkitHeader2 },
       });
       log.dim(`   → HTTP ${res3.status}`);
-      const paymentAmount = `${Number(chosen2.amount) / 1e6} USDC`;
-      return { response: res3, usedFreeTrial: false, paidUSDC: res3.status === 200, paymentAmount };
+      const paymentAmount = `${Number(chosen2.amount) / 1e6} USD`;
+      return { response: res3, usedFreeTrial: false, paidUSD: res3.status === 200, paymentAmount };
     } catch (err: any) {
       log.error(`   Payment failed: ${err.message}`);
-      return { response: res2, usedFreeTrial: false, paidUSDC: false };
+      return { response: res2, usedFreeTrial: false, paidUSD: false };
     }
   }
 
-  return { response: res2, usedFreeTrial: false, paidUSDC: false };
+  return { response: res2, usedFreeTrial: false, paidUSD: false };
 }
 
 // ── Main Demo ─────────────────────────────────────────────────────────────────
@@ -361,7 +361,7 @@ async function main() {
     endpoint: string;
     status: number;
     usedFreeTrial: boolean;
-    paidUSDC: boolean;
+    paidUSD: boolean;
     paymentAmount?: string;
     data?: any;
   }> = [];
@@ -370,7 +370,7 @@ async function main() {
   log.sep();
   log.header("📡 Call 1: Weather API — AgentKit mode (/api/weather/cannes)");
   try {
-    const { response, usedFreeTrial, paidUSDC, paymentAmount } = await agentFetch(
+    const { response, usedFreeTrial, paidUSD, paymentAmount } = await agentFetch(
       `${SERVER_URL}/api/weather/cannes`,
       account,
       walletSigner
@@ -383,17 +383,17 @@ async function main() {
       console.log(`\n${c.gray}${JSON.stringify(data, null, 2)}${c.reset}`);
     }
 
-    results.push({ endpoint: "/api/weather/cannes", status: response.status, usedFreeTrial, paidUSDC, paymentAmount, data });
+    results.push({ endpoint: "/api/weather/cannes", status: response.status, usedFreeTrial, paidUSD, paymentAmount, data });
   } catch (err: any) {
     log.error(`Error: ${err.message}`);
-    results.push({ endpoint: "/api/weather/cannes", status: 0, usedFreeTrial: false, paidUSDC: false });
+    results.push({ endpoint: "/api/weather/cannes", status: 0, usedFreeTrial: false, paidUSD: false });
   }
 
   // ── Call 2: Price Feed (with AgentKit) ────────────────────────────────────
   log.sep();
   log.header("📡 Call 2: Price Feed API — AgentKit mode (/api/prices/eth)");
   try {
-    const { response, usedFreeTrial, paidUSDC, paymentAmount } = await agentFetch(
+    const { response, usedFreeTrial, paidUSD, paymentAmount } = await agentFetch(
       `${SERVER_URL}/api/prices/eth`,
       account,
       walletSigner
@@ -406,17 +406,17 @@ async function main() {
       console.log(`\n${c.gray}${JSON.stringify(data, null, 2)}${c.reset}`);
     }
 
-    results.push({ endpoint: "/api/prices/eth", status: response.status, usedFreeTrial, paidUSDC, paymentAmount, data });
+    results.push({ endpoint: "/api/prices/eth", status: response.status, usedFreeTrial, paidUSD, paymentAmount, data });
   } catch (err: any) {
     log.error(`Error: ${err.message}`);
-    results.push({ endpoint: "/api/prices/eth", status: 0, usedFreeTrial: false, paidUSDC: false });
+    results.push({ endpoint: "/api/prices/eth", status: 0, usedFreeTrial: false, paidUSD: false });
   }
 
   // ── Call 3: Weather (wallet-only, no AgentKit) ────────────────────────────
   log.sep();
   log.header("📡 Call 3: Weather API — Wallet-only mode (/api/weather/paris)");
   try {
-    const { response, usedFreeTrial, paidUSDC, paymentAmount } = await agentFetch(
+    const { response, usedFreeTrial, paidUSD, paymentAmount } = await agentFetch(
       `${SERVER_URL}/api/weather/paris`,
       account,
       walletSigner,
@@ -430,10 +430,10 @@ async function main() {
       console.log(`\n${c.gray}${JSON.stringify(data, null, 2)}${c.reset}`);
     }
 
-    results.push({ endpoint: "/api/weather/paris (wallet-only)", status: response.status, usedFreeTrial, paidUSDC, paymentAmount, data });
+    results.push({ endpoint: "/api/weather/paris (wallet-only)", status: response.status, usedFreeTrial, paidUSD, paymentAmount, data });
   } catch (err: any) {
     log.error(`Error: ${err.message}`);
-    results.push({ endpoint: "/api/weather/paris (wallet-only)", status: 0, usedFreeTrial: false, paidUSDC: false });
+    results.push({ endpoint: "/api/weather/paris (wallet-only)", status: 0, usedFreeTrial: false, paidUSD: false });
   }
 
   // ── Summary ───────────────────────────────────────────────────────────────
@@ -441,24 +441,24 @@ async function main() {
   log.header("📊 Summary");
   log.sep();
 
-  let totalUsdc = 0;
+  let totalUSD = 0;
   let freeTrialCount = 0;
 
   for (const r of results) {
     const status = r.status === 200 ? c.green + "200 OK" : c.red + `${r.status}`;
     const mode = r.usedFreeTrial
       ? c.green + "FREE TRIAL"
-      : r.paidUSDC
+      : r.paidUSD
       ? c.cyan + `PAID ${r.paymentAmount}`
       : c.red + "FAILED/NO_KEY";
     console.log(`   ${r.endpoint.padEnd(30)} ${status}${c.reset}  ${mode}${c.reset}`);
-    if (r.paidUSDC && r.paymentAmount) totalUsdc += parseFloat(r.paymentAmount);
+    if (r.paidUSD && r.paymentAmount) totalUSD += parseFloat(r.paymentAmount);
     if (r.usedFreeTrial) freeTrialCount++;
   }
 
   console.log("");
   console.log(`   ${c.bold}Free-trial calls:${c.reset}  ${freeTrialCount}`);
-  console.log(`   ${c.bold}USDC paid:${c.reset}         ${totalUsdc.toFixed(4)} USDC`);
+  console.log(`   ${c.bold}USD paid:${c.reset}         ${totalUSD.toFixed(4)} USD`);
   console.log(`   ${c.bold}Gas paid by agent:${c.reset} $0.00 (sponsored by Publisher Paymaster)`);
   console.log(`   ${c.bold}AgentKit verified:${c.reset} ${account ? c.green + "✅ (World ID proof)" : c.yellow + "⚠️  (no key)"}${c.reset}`);
   log.sep();

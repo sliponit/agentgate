@@ -77,7 +77,7 @@ router.get("/stats/:address", (c) => {
   return c.json({
     address,
     gasSpentEth: stats.gasSpent,
-    revenueUsdc: stats.revenue,
+    revenueUSD: stats.revenue,
     totalCalls: stats.calls,
     roi: stats.gasSpent > 0 ? ((stats.revenue - stats.gasSpent) / stats.gasSpent) * 100 : 0,
     endpoints: stats.endpoints,
