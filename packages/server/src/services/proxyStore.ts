@@ -1,36 +1,65 @@
 /**
  * proxyStore.ts
  *
- * In-memory store for proxy endpoint configurations.
- * Maps endpointId (from PublisherRegistry) to a backend URL + headers to inject.
+ * Persistent store for proxy endpoint configurations.
+ * Saves to a JSON file on every write — survives server restarts and redeploys.
  *
  * Security: only the endpoint's on-chain publisher can register a config,
  * verified via EIP-191 wallet signature before storing.
  */
 
+import * as fs from "fs";
+import * as path from "path";
+
 export interface ProxyConfig {
   endpointId:      number;
-  name:            string;                   // human-readable name (e.g. "GPT-4o Chat")
+  name:            string;
   backendUrl:      string;
-  injectHeaders:   Record<string, string>;  // e.g. {"x-api-key": "sk-ant-..."}
-  publisherAddr:   string;                  // lowercase
-  requireWorldId:  boolean;                 // if true, agents must provide valid WorldID proof
+  injectHeaders:   Record<string, string>;
+  publisherAddr:   string;
+  requireWorldId:  boolean;
   registeredAt:    Date;
 }
 
-const store = new Map<number, ProxyConfig>();
+// Use /tmp on Vercel (read-only filesystem), project dir otherwise
+const DATA_DIR = process.env.VERCEL ? "/tmp" : path.resolve(__dirname, "../../data");
+const STORE_FILE = path.join(DATA_DIR, "proxy-configs.json");
 
-// ── Call tracking (in-memory) ──────────────────────────────────────────────
-// Per-endpoint total calls + per-agent call log
+// Ensure data directory exists
+try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch {}
+
+// Load from disk on startup
+const store = new Map<number, ProxyConfig>();
+try {
+  if (fs.existsSync(STORE_FILE)) {
+    const data = JSON.parse(fs.readFileSync(STORE_FILE, "utf-8")) as ProxyConfig[];
+    for (const config of data) {
+      config.registeredAt = new Date(config.registeredAt);
+      store.set(config.endpointId, config);
+    }
+    console.log(`[proxyStore] Loaded ${store.size} configs from disk`);
+  }
+} catch (e: any) {
+  console.warn("[proxyStore] Could not load from disk:", e.message);
+}
+
+function saveToDisk() {
+  try {
+    const data = Array.from(store.values());
+    fs.writeFileSync(STORE_FILE, JSON.stringify(data, null, 2));
+  } catch (e: any) {
+    console.warn("[proxyStore] Could not save to disk:", e.message);
+  }
+}
+
+// ── Call tracking (in-memory — resets on restart, that's OK) ────────────────
 interface CallRecord {
   agentAddress: string;
   timestamp:    number;
-  freeTrial:    boolean;  // true = free-trial call, false = paid
+  freeTrial:    boolean;
 }
 
 const endpointCalls = new Map<number, CallRecord[]>();
-
-// Free-trial usage: key = "address:endpointId" → count
 const FREE_TRIAL_LIMIT = 3;
 const freeTrialUsage = new Map<string, number>();
 
@@ -80,6 +109,7 @@ export const callTracker = {
 export const proxyStore = {
   set(config: ProxyConfig) {
     store.set(config.endpointId, config);
+    saveToDisk();
   },
 
   get(endpointId: number): ProxyConfig | undefined {
@@ -88,6 +118,7 @@ export const proxyStore = {
 
   delete(endpointId: number) {
     store.delete(endpointId);
+    saveToDisk();
   },
 
   all(): ProxyConfig[] {
