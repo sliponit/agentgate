@@ -456,6 +456,7 @@ export function ManageEndpoint(_props: { networkId: NetworkId }) {
           display: "flex", flexDirection: "column", alignItems: "center", gap: 12,
         }}>
           <div style={{ fontSize: 13, color: "#555" }}>Connect your wallet to see your published endpoints</div>
+          <div style={{ fontSize: 13, color: "#555" }}>You may need to manually add Hedera testnet to your wallet, go to <a href="https://chainlist.org/?search=hedera&testnets=true" target="_blank"><b>chainlist.org</b></a></div>
           <button
             onClick={wallet.connect}
             style={{
