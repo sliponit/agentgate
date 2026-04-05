@@ -4,7 +4,7 @@ Pay-per-call API gateway for AI agents on Hedera, using x402 protocol and WorldI
 
 ## Description
 
-AgentGate is a pay-per-call API gateway for AI agents built on Hedera Testnet. It solves a core problem in the agentic economy: how do autonomous AI agents discover, authenticate against, and pay for API services — without human intervention at every step?
+AgentGate is a pay-per-call API gateway for AI agents built on Hedera Testnet. It solves a core problem in the agentic economy: how do autonomous AI agents discover, authenticate against, and pay for API services — without human intervention at every step.
 
 For publishers, AgentGate provides a dashboard to register any API endpoint with per-call USD pricing, deposit HBAR to sponsor agent gas costs, and configure what percentage of gas to subsidize. Publishers compete on price, gas sponsorship, and uptime — creating a natural marketplace for API access.
 
