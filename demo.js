@@ -1,9 +1,11 @@
 const { ethers } = require("ethers");
 const { formatSIWEMessage } = require("@worldcoin/agentkit");
 
+require("dotenv").config();
+const KEY = process.argv[2] || process.env.AGENT_PRIVATE_KEY || process.env.PRIVATE_KEY;
+const ENDPOINT = process.argv[3] || "https://agentgate.onrender.com/api/proxy/2";
+if (!KEY) { console.error("Usage: node demo.js [PRIVATE_KEY] [ENDPOINT_URL]"); process.exit(1); }
 const RPC = "https://agentgate-frontend.vercel.app/api/hedera-rpc";
-const ENDPOINT = "https://agentgate.onrender.com/api/proxy/1";
-const KEY = "0xd8990d585dd02953971d40e5d07677ff5f5337d387845c75e7c4ccdab120c252";
 const WEI_PER_TINYBAR = 10_000_000_000n;
 
 (async () => {
